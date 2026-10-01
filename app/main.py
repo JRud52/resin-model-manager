@@ -11,10 +11,10 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import archives, config, db, library
+from . import __version__, archives, config, db, library
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-app = FastAPI(title="Resin Model Manager")
+app = FastAPI(title="Resin Model Manager", version=__version__)
 STATIC = Path(__file__).parent / "static"
 
 
@@ -50,6 +50,8 @@ def status():
         "source_dir": str(config.SOURCE_DIR),
         "source_available": config.SOURCE_DIR.is_dir(),
         "library_dir": str(config.LIBRARY_DIR),
+        "version": __version__,
+        "commit": config.GIT_COMMIT,
     }
 
 

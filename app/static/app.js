@@ -368,6 +368,7 @@ async function pollStatus() {
       el.textContent = j.last?.error ? `Last ${j.last.job} failed: ${j.last.message}` : (j.last?.message || `${s.models} models · ${s.files} files`);
     }
     el.title = el.textContent;
+    $("#version").textContent = `v${s.version}${s.commit ? ` (${s.commit})` : ""}`;
     $("#importBtn").disabled = $("#scanBtn").disabled = !!j.running;
     $("#importBtn").title = s.source_available ? `Copy ${s.source_dir} into ${s.library_dir}` : `${s.source_dir} is not mounted`;
     if (wasRunning && !j.running) refresh();
