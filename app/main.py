@@ -28,7 +28,7 @@ def startup():
     if library.migrate_layouts():
         library.request_reindex()
     else:
-        library.rematch_images()
+        library.reclassify()  # database only: applies grouping and picture-matching changes on upgrade
     library._preview_wakeup.set()
 
 

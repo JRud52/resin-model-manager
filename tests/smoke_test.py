@@ -51,6 +51,8 @@ expected = {"Red Dragon", "Knight", "Goblin Boss", "Rat Captain", "Rat Trooper",
 assert expected <= set(models), expected - set(models)
 assert models["Red Dragon"]["supported_files"] == 2 and models["Red Dragon"]["unsupported_files"] == 2
 assert models["Lich King"]["supported_files"] == 1, "7z support detection"
+# Nothing marks the Skeleton files as supported, so they count as unsupported.
+assert models["Skeleton"]["unsupported_files"] == 2 and not models["Skeleton"]["supported_files"], models["Skeleton"]
 assert models["Goblin Boss"]["options"] == 1, "option folders"
 
 # Previews, including members of .zip and .7z archives.

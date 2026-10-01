@@ -382,7 +382,7 @@ def reclassify():
         lp = r["logical_path"]
         g = classify.guess(lp, depth_for(lp, layouts, default_depth), by_folder[str(PurePosixPath(lp).parent)])
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
-        creator = g.creator
+        creator, set_unknown = g.creator, False
         for o in overrides:
             pre = o["prefix"]
             if lp == pre or lp.startswith(pre.rstrip("/") + "/"):
@@ -392,21 +392,16 @@ def reclassify():
                 creator = o["creator"] if o["creator"] is not None else creator
                 if o["supported"] is not None:  # 1 supported, 0 unsupported, -1 unknown
                     supported = None if o["supported"] == -1 else bool(o["supported"])
+                    set_unknown = o["supported"] == -1
                 hidden = o["hidden"] if o["hidden"] is not None else hidden
         creator = release_creators.get(release.lower(), creator)
         sup = None if supported is None else int(supported)
+        # Nothing in the name or a parent folder says supported: treat it as unsupported,
+        # unless the user explicitly marked it unknown.
+        if sup is None and not set_unknown:
+            sup = 0
         updates.append([creator, release, model, model_id(release, model), option, sup,
                         g.model_root, hidden, r["id"]])
-    # A file with no support marker next to "<same name> supported" is the unsupported copy.
-    stems = {r["id"]: classify.strip_tokens(PurePosixPath(r["logical_path"]).stem) for r in rows}
-    mesh = {r["id"] for r in rows if r["ext"] in (".stl", ".obj", ".3mf")}
-    supported_names = defaultdict(set)
-    for u in updates:
-        if u[5] == 1:
-            supported_names[u[3]].add(stems[u[8]])
-    for u in updates:
-        if u[5] is None and u[8] in mesh and stems[u[8]] and stems[u[8]] in supported_names[u[3]]:
-            u[5] = 0
     c.executemany("UPDATE files SET creator=?, release=?, model=?, model_id=?, option=?, supported=?, "
                   "model_root=?, hidden=? WHERE id=?", updates)
     match_images(c, overrides)
@@ -529,14 +524,6 @@ def match_images(c, overrides):
             mid = next(iter(only)) if len(only) == 1 and forced != "" else ""
             updates.append((release, mid, "release", rank, hidden, r["id"]))
     c.executemany("UPDATE images SET release=?, model_id=?, scope=?, rank=?, hidden=? WHERE id=?", updates)
-
-
-def rematch_images():
-    """Re-attach pictures to models (cheap; run at startup so matching changes apply)."""
-    c = db.conn()
-    overrides = sorted(c.execute("SELECT * FROM overrides").fetchall(), key=lambda r: len(r["prefix"]))
-    match_images(c, overrides)
-    c.commit()
 
 
 def _ids_in_chunks(q: str, ids: list[str]):
