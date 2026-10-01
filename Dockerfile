@@ -8,7 +8,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
-# PUID/PGID let files written to /library and /data belong to your NAS user.
+# Default user baked into the image; docker-compose.yml overrides it at run
+# time with `user: PUID:PGID` so files belong to your NAS user.
 ARG PUID=1000
 ARG PGID=1000
 RUN groupadd -g ${PGID} rmm && useradd -u ${PUID} -g ${PGID} -M rmm \

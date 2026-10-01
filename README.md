@@ -49,16 +49,52 @@ groups them by **release** and **model**, separates **supported** and
 
 ## Running on the NAS
 
-1. Copy this folder to the NAS.
-2. Edit `docker-compose.yml`:
-   * the three volume paths (your existing library → `/source:ro`, plus two new
-     empty folders for `/library` and `/data`);
-   * `PUID`/`PGID` to your NAS user (`id -u`, `id -g`) so the copied files
-     belong to you.
-3. `docker compose up -d --build`, then open `http://<nas>:8080`.
-4. Click **Import library**. Progress shows in the header. Rendering previews for
-   a large library takes a while the first time; after that they come from the
-   cache.
+GitHub Actions builds the image on every push to `main` and publishes it as
+`ghcr.io/jrud52/resin-model-manager:latest` (amd64 and arm64). Nothing in
+`docker-compose.yml` needs editing: folder paths, user and port come from
+environment variables (see `.env.example` for the full list).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SOURCE_PATH` | `/volume1/3d-models` | Your existing library, mounted read-only at `/source`. |
+| `LIBRARY_PATH` | `/volume1/resin-manager/library` | New empty folder for the imported copy. |
+| `DATA_PATH` | `/volume1/resin-manager/data` | New empty folder for the database and preview cache. |
+| `PUID` / `PGID` | `1000` | Your NAS user (`id -u`, `id -g`), so copied files belong to you. |
+| `PORT` | `8080` | Port on the NAS. |
+
+### With Portainer (auto-updates from Git)
+
+1. **Stacks → Add stack → Repository.** Repository URL
+   `https://github.com/JRud52/resin-model-manager`, reference `refs/heads/main`,
+   compose path `docker-compose.yml`.
+2. Under **Environment variables**, add `SOURCE_PATH`, `LIBRARY_PATH`,
+   `DATA_PATH`, `PUID` and `PGID` (plus any settings below you want to change).
+3. Turn on **GitOps updates**, mechanism **Polling** (e.g. every `5m`), and turn
+   on **Re-pull image** and **Force redeployment**. Force redeployment makes
+   every poll pull the image even when the repo has no new commit, so an image
+   that finishes building a few minutes after the commit is still picked up.
+   The container is only recreated when the image actually changed.
+4. **Deploy the stack**, open `http://<nas>:8080` and click **Import library**.
+
+Don't use a compose file with a `build:` section in Portainer: it builds once
+and then keeps reusing the old image on updates.
+
+### With docker compose
+
+1. Copy `docker-compose.yml` and `.env.example` to the NAS, rename the latter to
+   `.env` and fill in your paths and IDs.
+2. `docker compose up -d`, then open `http://<nas>:8080`.
+3. Update later with `docker compose pull && docker compose up -d`.
+
+To build the image yourself instead of pulling it, run
+`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`
+from a checkout.
+
+### First run
+
+Click **Import library**. Progress shows in the header. Rendering previews for
+a large library takes a while the first time; after that they come from the
+cache.
 
 Once you trust it, you can point `/library` at your real library instead of the
 copy (keep it `:ro` if you like; the app only writes to `/data`, except during
