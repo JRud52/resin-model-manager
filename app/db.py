@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS model_tags (
 );
 CREATE INDEX IF NOT EXISTS model_tags_tag ON model_tags(tag);
 
+-- Creator set for a release from the app. Wins over the folder guess and import
+-- rules, and survives re-indexing because it is keyed on the release name.
+CREATE TABLE IF NOT EXISTS release_creators (
+    release TEXT PRIMARY KEY COLLATE NOCASE,
+    creator TEXT NOT NULL
+);
+
 -- Values saved from the Settings dialog (see settings.py).
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -84,6 +91,7 @@ CREATE TABLE IF NOT EXISTS overrides (
     release TEXT,
     model TEXT,
     option TEXT,
+    creator TEXT,
     supported INTEGER,
     hidden INTEGER,
     created REAL DEFAULT (strftime('%s','now'))
@@ -110,4 +118,6 @@ def init():
     c.executescript(SCHEMA)
     if "listed" not in {r["name"] for r in c.execute("PRAGMA table_info(archives)")}:
         c.execute("ALTER TABLE archives ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
+    if "creator" not in {r["name"] for r in c.execute("PRAGMA table_info(overrides)")}:
+        c.execute("ALTER TABLE overrides ADD COLUMN creator TEXT")
     c.commit()

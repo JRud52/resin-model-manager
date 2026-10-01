@@ -41,6 +41,14 @@ groups them by **release** and **model**, separates **supported** and
   (several tags = models that have all of them). The search box also matches
   tags; `tag:painted` matches that tag exactly. Tags follow a model when you
   rename or merge it.
+* **Creators.** With a release selected, *Set creator* names who made it. *Edit*
+  next to Creators in the sidebar sets the creator of many releases at once
+  (filter the list, tick releases, save). The Import dialog has an optional
+  Creator field for everything you upload. Click a creator in the sidebar to
+  browse only their releases; the search box matches creators too. With the
+  *Creator / Release* folder setting, the creator folder is used until you set
+  one. Creators are kept when the library is re-indexed; save a blank creator
+  to go back to the folder guess.
 * **Previews.** STLs are rendered by a built-in CPU renderer (numpy, no GPU or
   OpenGL needed) and cached as WebP images in `data/previews`. Files inside
   archives are rendered straight from the archive without extracting them into

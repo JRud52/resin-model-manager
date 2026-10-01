@@ -29,12 +29,25 @@ header h1 { font-size: 17px; margin: 0 8px 0 0; white-space: nowrap; }
 #layout { display: flex; min-height: calc(100vh - 56px); }
 #sidebar { width: 260px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; max-height: calc(100vh - 56px); position: sticky; top: 56px; }
 .side-title { padding: 12px 16px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-#releases { list-style: none; margin: 0; padding: 0 8px 16px; }
-#releases li { padding: 7px 10px; border-radius: 8px; cursor: pointer; display: flex; gap: 8px; }
-#releases li:hover { background: var(--panel2); }
-#releases li.active { background: var(--accent); color: #08131d; }
-#releases li.active .muted { color: #08131d; }
-#releases .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#releases, #creators { list-style: none; margin: 0; padding: 0 8px 16px; }
+#releases li, #creators li { padding: 7px 10px; border-radius: 8px; cursor: pointer; display: flex; gap: 8px; }
+#releases li:hover, #creators li:hover { background: var(--panel2); }
+#releases li.active, #creators li.active { background: var(--accent); color: #08131d; }
+#releases li.active .muted, #creators li.active .muted { color: #08131d; }
+#releases .name, #creators .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#releases .by { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+#releases li.active .by { color: #08131d; }
+#creators { max-height: 40vh; overflow-y: auto; }
+.side-title .link { all: unset; cursor: pointer; float: right; text-transform: none; letter-spacing: 0; color: var(--accent); }
+.side-title .link:hover { text-decoration: underline; }
+#creatorDlg { max-width: min(560px, 96vw); }
+#creatorDlg .card-form { background: none; padding: 0; margin: 0; }
+#creatorDlg .dlg-head { margin-bottom: 0; }
+#creatorReleases { max-height: 45vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+#creatorReleases label { flex-direction: row; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 13px; cursor: pointer; }
+#creatorReleases label:last-child { border-bottom: 0; }
+#creatorReleases label.all { background: var(--panel2); }
+#creatorReleases .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 main { flex: 1; padding: 16px; min-width: 0; }
 .crumb-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }

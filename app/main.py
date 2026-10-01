@@ -106,9 +106,9 @@ def retry_previews():
 # ---------------------------------------------------------------- browsing
 
 @app.get("/api/releases")
-def releases(q: str = "", tags: str = ""):
+def releases(q: str = "", tags: str = "", creator: Optional[str] = None):
     c = db.conn()
-    where, args = _filters(None, q, [t for t in tags.split(",") if t.strip()])
+    where, args = _filters(None, q, [t for t in tags.split(",") if t.strip()], creator)
     rows = c.execute(f"""SELECT release, MAX(creator) creator, COUNT(DISTINCT model_id) models, COUNT(*) files,
                          SUM(size) size FROM files WHERE {where} GROUP BY release ORDER BY release COLLATE NOCASE""",
                      args).fetchall()
@@ -121,20 +121,23 @@ def release_images(release: str):
     return library.release_images(release)
 
 
-def _filters(release: Optional[str], q: str, tags: list[str]):
+def _filters(release: Optional[str], q: str, tags: list[str], creator: Optional[str] = None):
     where, args = ["hidden=0"], []
     if release is not None:
         where.append("release = ?")
         args.append(release)
+    if creator is not None:  # '' selects releases without a creator
+        where.append("creator = ? COLLATE NOCASE")
+        args.append(creator)
     if q:
         for word in q.split():
             if word.lower().startswith("tag:") and len(word) > 4:  # exact tag search
                 where.append("model_id IN (SELECT model_id FROM model_tags WHERE tag = ?)")
                 args.append(word[4:])
                 continue
-            where.append("(model LIKE ? OR release LIKE ? OR logical_path LIKE ? "
+            where.append("(model LIKE ? OR release LIKE ? OR creator LIKE ? OR logical_path LIKE ? "
                          "OR model_id IN (SELECT model_id FROM model_tags WHERE tag LIKE ?))")
-            args += [f"%{word}%"] * 4
+            args += [f"%{word}%"] * 5
     for t in tags:  # every selected tag must be present
         where.append("model_id IN (SELECT model_id FROM model_tags WHERE tag = ?)")
         args.append(t)
@@ -163,9 +166,9 @@ def _clean_tags(tags: list[str]) -> list[str]:
 
 @app.get("/api/models")
 def models(release: Optional[str] = None, q: str = "", supported: Optional[str] = None,
-           tags: str = "", offset: int = 0, limit: int = Query(200, le=1000)):
+           tags: str = "", creator: Optional[str] = None, offset: int = 0, limit: int = Query(200, le=1000)):
     c = db.conn()
-    where, args = _filters(release, q, [t for t in tags.split(",") if t.strip()])
+    where, args = _filters(release, q, [t for t in tags.split(",") if t.strip()], creator)
     having = ""
     if supported == "yes":
         having = "HAVING SUM(supported = 1) > 0"
@@ -325,6 +328,45 @@ def release_tags(t: TagsIn):
     return {"models": len(ids)}
 
 
+# ---------------------------------------------------------------- creators
+
+@app.get("/api/creators")
+def creators(q: str = "", tags: str = ""):
+    """Every creator with its release and model counts ('' = releases without one)."""
+    where, args = _filters(None, q, [t for t in tags.split(",") if t.strip()])
+    rows = db.conn().execute(f"""SELECT MIN(creator) creator, COUNT(DISTINCT release) releases,
+                                 COUNT(DISTINCT model_id) models FROM files WHERE {where}
+                                 GROUP BY creator COLLATE NOCASE ORDER BY creator COLLATE NOCASE""", args).fetchall()
+    return [dict(r) for r in rows]
+
+
+class CreatorIn(BaseModel):
+    releases: list[str]
+    creator: str = ""  # blank goes back to the folder guess or import rule
+
+
+@app.post("/api/releases/creator")
+def set_release_creator(body: CreatorIn):
+    """Set the creator of one or more releases. Kept across re-indexing."""
+    creator = " ".join(body.creator.split())
+    if len(creator) > 200:
+        raise HTTPException(400, "Creator name is too long")
+    c = db.conn()
+    if creator:  # reuse the spelling a creator already has
+        row = c.execute("SELECT creator FROM files WHERE creator = ? COLLATE NOCASE AND hidden=0 LIMIT 1",
+                        (creator,)).fetchone()
+        creator = row[0] if row else creator
+    for release in body.releases:
+        if creator:
+            c.execute("INSERT INTO release_creators(release, creator) VALUES (?, ?) "
+                      "ON CONFLICT(release) DO UPDATE SET creator=excluded.creator", (release, creator))
+        else:
+            c.execute("DELETE FROM release_creators WHERE release = ?", (release,))
+    c.commit()
+    library.reclassify()
+    return {"releases": len(body.releases), "creator": creator}
+
+
 # ---------------------------------------------------------------- corrections
 
 class OverrideIn(BaseModel):
@@ -332,6 +374,7 @@ class OverrideIn(BaseModel):
     release: Optional[str] = None
     model: Optional[str] = None
     option: Optional[str] = None
+    creator: Optional[str] = None
     supported: Optional[int] = None  # 1 / 0 / -1 (unknown)
     hidden: Optional[int] = None
     from_model_id: Optional[str] = None  # when renaming a whole model, its tags move with it
@@ -345,14 +388,14 @@ def add_override(o: OverrideIn):
         if not prefix:
             raise HTTPException(400, "Empty prefix")
         existing = c.execute("SELECT * FROM overrides WHERE prefix=?", (prefix,)).fetchone()
-        vals = {k: getattr(o, k) for k in ("release", "model", "option", "supported", "hidden")}
+        vals = {k: getattr(o, k) for k in ("release", "model", "option", "creator", "supported", "hidden")}
         if existing:
             merged = {k: (vals[k] if vals[k] is not None else existing[k]) for k in vals}
-            c.execute("UPDATE overrides SET release=?, model=?, option=?, supported=?, hidden=? WHERE id=?",
+            c.execute("UPDATE overrides SET release=?, model=?, option=?, creator=?, supported=?, hidden=? WHERE id=?",
                       (*merged.values(), existing["id"]))
         else:
-            c.execute("INSERT INTO overrides(prefix, release, model, option, supported, hidden) VALUES (?,?,?,?,?,?)",
-                      (prefix, *vals.values()))
+            c.execute("INSERT INTO overrides(prefix, release, model, option, creator, supported, hidden) "
+                      "VALUES (?,?,?,?,?,?,?)", (prefix, *vals.values()))
     c.commit()
     library.reclassify()
     if o.from_model_id and o.model is not None and o.release is not None:

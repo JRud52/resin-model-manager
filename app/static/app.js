@@ -12,24 +12,55 @@ const fmtSize = (b) => {
   return `${b.toFixed(b < 10 && i ? 1 : 0)} ${u[i]}`;
 };
 
-const state = { release: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null };
+// creator: null = all creators, "" = releases without a creator
+const state = { release: null, creator: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null, releases: [] };
 const PAGE = 120;
 
 // ------------------------------------------------------------ releases & grid
 
+const filterParams = () => {
+  const p = new URLSearchParams({ q: state.q, tags: state.tags.join(",") });
+  if (state.creator !== null) p.set("creator", state.creator);
+  return p;
+};
+
 async function loadReleases() {
-  const rels = await api(`/api/releases?q=${encodeURIComponent(state.q)}&tags=${encodeURIComponent(state.tags.join(","))}`);
+  const rels = await api(`/api/releases?${filterParams()}`);
+  state.releases = rels;
   const ul = $("#releases");
   const total = rels.reduce((a, r) => a + r.models, 0);
+  const by = (r) => state.creator === null && r.creator ? `<span class="by">${esc(r.creator)}</span>` : "";
   ul.innerHTML = `<li data-r="" class="${state.release === null ? "active" : ""}"><span class="name">All releases</span><span class="muted">${total}</span></li>` +
-    rels.map((r) => `<li data-r="${esc(r.release)}" class="${state.release === r.release ? "active" : ""}" title="${esc(r.release)}">
-      <span class="name">${esc(r.release)}</span><span class="muted">${r.models}</span></li>`).join("");
+    rels.map((r) => `<li data-r="${esc(r.release)}" class="${state.release === r.release ? "active" : ""}" title="${esc(r.creator ? `${r.release} by ${r.creator}` : r.release)}">
+      <span class="name">${esc(r.release)}${by(r)}</span><span class="muted">${r.models}</span></li>`).join("");
   $("#releaseList").innerHTML = rels.map((r) => `<option value="${esc(r.release)}">`).join("");
 }
 
 $("#releases").addEventListener("click", (e) => {
   const li = e.target.closest("li"); if (!li) return;
   state.release = li.dataset.r === "" ? null : li.dataset.r;
+  $("#sidebar").classList.remove("open");
+  refresh();
+});
+
+async function loadCreators() {
+  const p = filterParams(); p.delete("creator");
+  const list = await api(`/api/creators?${p}`);
+  const named = list.filter((c) => c.creator);
+  const none = list.find((c) => !c.creator);
+  $("#creatorOptions").innerHTML = named.map((c) => `<option value="${esc(c.creator)}">`).join("");
+  const li = (value, label, n, cls = "") => `<li data-c="${esc(value)}" class="${cls} ${state.creator === value ? "active" : ""}" title="${esc(label)}">
+      <span class="name">${esc(label)}</span><span class="muted">${n}</span></li>`;
+  $("#creators").innerHTML = (named.length ? `<li data-all class="${state.creator === null ? "active" : ""}"><span class="name">All creators</span></li>` : "") +
+    named.map((c) => li(c.creator, c.creator, c.releases)).join("") +
+    (none && named.length ? li("", "No creator", none.releases, "muted") : "") +
+    (named.length ? "" : `<li class="muted small" style="cursor:default">Set a creator from a release, or when importing.</li>`);
+}
+
+$("#creators").addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-c], li[data-all]"); if (!li) return;
+  state.creator = li.hasAttribute("data-all") ? null : li.dataset.c;
+  state.release = null;
   $("#sidebar").classList.remove("open");
   refresh();
 });
@@ -63,6 +94,7 @@ async function loadModels(append = false) {
   if (state.release !== null) p.set("release", state.release);
   if (state.sup) p.set("supported", state.sup);
   if (state.tags.length) p.set("tags", state.tags.join(","));
+  if (state.creator !== null) p.set("creator", state.creator);
   if (!append) loadReleaseImages();
   const res = await api(`/api/models?${p}`);
   state.total = res.total;
@@ -70,7 +102,10 @@ async function loadModels(append = false) {
   const grid = $("#grid");
   grid.innerHTML = state.items.map(card).join("");
   $("#more").classList.toggle("hidden", state.items.length >= state.total);
-  $("#crumbs").textContent = `${state.release ?? "All releases"} · ${state.total} models`;
+  const rel = state.releases.find((r) => r.release === state.release);
+  const who = state.release !== null ? rel?.creator : state.creator === "" ? "No creator" : state.creator;
+  $("#crumbs").textContent = [who, state.release ?? "All releases"].filter(Boolean).join(" / ") + ` · ${state.total} models`;
+  $("#releaseCreatorBtn").classList.toggle("hidden", state.release === null);
   $("#activeTags").innerHTML = state.tags.map((t) => `<span class="badge tag on" data-tag="${esc(t)}" title="Remove filter">${esc(t)} ✕</span>`).join("");
   $("#releaseTagBtn").classList.toggle("hidden", state.release === null);
   $("#modelList").innerHTML = [...new Set(state.items.map((m) => m.model))].map((m) => `<option value="${esc(m)}">`).join("");
@@ -103,7 +138,7 @@ $("#lightbox").addEventListener("click", () => $("#lightbox").close());
 $("#more").onclick = () => { state.offset += PAGE; loadModels(true); };
 $("#grid").addEventListener("click", (e) => { const c = e.target.closest(".card"); if (c) openModel(c.dataset.id); });
 
-function refresh() { loadReleases(); loadModels(); loadTags(); }
+async function refresh() { loadCreators(); loadTags(); await loadReleases(); await loadModels(); }
 
 // ------------------------------------------------------------ tags
 
@@ -163,6 +198,54 @@ $("#releaseTagDlg").addEventListener("close", async () => {
   await api("/api/releases/tags", { method: "POST", body: JSON.stringify(body) });
   refresh();
 });
+
+// ------------------------------------------------------------ creators
+
+async function openCreators(releases, preset = "") {
+  const dlg = $("#creatorDlg"), form = $("form", dlg);
+  const all = await api("/api/releases");
+  form.reset();
+  form.creator.value = preset;
+  const checked = new Set(releases);
+  $("#creatorReleases").innerHTML = `<label class="all"><input type="checkbox" data-all> <span class="name">Select all shown</span></label>` +
+    all.map((r) => `<label data-name="${esc(r.release.toLowerCase())}"><input type="checkbox" value="${esc(r.release)}" ${checked.has(r.release) ? "checked" : ""}>
+      <span class="name">${esc(r.release)}</span><span class="muted small">${esc(r.creator || "")}</span></label>`).join("");
+  updateCreatorCount();
+  dlg.showModal();
+  if (releases.length === 1) form.creator.select();
+}
+function creatorBoxes() { return [...$("#creatorReleases").querySelectorAll("input[value]")]; }
+function updateCreatorCount() {
+  const on = creatorBoxes().filter((b) => b.checked), n = on.length;
+  const hidden = on.filter((b) => b.closest("label").hidden).length;
+  $("#creatorCount").textContent = n ? `${n} release${n === 1 ? "" : "s"} selected${hidden ? ` (${hidden} hidden by the filter)` : ""}.` : "Tick the releases to change.";
+  $("#creatorDlg button[value=save]").disabled = !n;
+}
+$("#creatorReleases").addEventListener("change", (e) => {
+  if (e.target.hasAttribute("data-all")) creatorBoxes().forEach((b) => { if (!b.closest("label").hidden) b.checked = e.target.checked; });
+  updateCreatorCount();
+});
+$("#creatorDlg form").filter.addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  creatorBoxes().forEach((b) => (b.closest("label").hidden = !!q && !b.closest("label").dataset.name.includes(q)));
+  updateCreatorCount();
+});
+$("#creatorDlg form").filter.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+$("#creatorDlg").addEventListener("close", async () => {
+  const dlg = $("#creatorDlg");
+  if (dlg.returnValue !== "save") return;
+  const releases = creatorBoxes().filter((b) => b.checked).map((b) => b.value);
+  if (!releases.length) return;
+  const r = await api("/api/releases/creator", { method: "POST", body: JSON.stringify({ releases, creator: $("form", dlg).creator.value }) });
+  if (state.creator !== null) state.creator = r.creator || null;  // follow the edited releases
+  refresh();
+});
+$("#releaseCreatorBtn").onclick = () => {
+  const rel = state.releases.find((r) => r.release === state.release);
+  openCreators([state.release], rel?.creator || "");
+};
+$("#editCreatorsBtn").onclick = () =>
+  openCreators(state.creator !== null ? state.releases.map((r) => r.release) : [], state.creator || "");
 
 let searchTimer;
 $("#search").addEventListener("input", (e) => {
@@ -379,6 +462,7 @@ $("#rulesBtn").onclick = async () => {
     if (r.release != null) ch.push(`release → ${esc(r.release)}`);
     if (r.model != null) ch.push(`model → ${esc(r.model)}`);
     if (r.option != null) ch.push(`option → ${esc(r.option)}`);
+    if (r.creator != null) ch.push(`creator → ${esc(r.creator)}`);
     if (r.supported != null) ch.push(sup[r.supported]);
     if (r.hidden) ch.push("hidden");
     return `<tr><td class="path">${esc(r.prefix)}</td><td>${ch.join("<br>")}</td><td><button data-del="${r.id}">Delete</button></td></tr>`;
@@ -523,8 +607,12 @@ function putFile(path, file, onProgress) {
     x.send(file);
   });
 }
+// Logical path prefix the uploaded item ends up under (archives are read as folders).
+const topPrefix = (folder, rel) => folder || rel.split("/")[0].replace(/\.(zip|7z)$/i, "");
+
 $("#uploadBtn").onclick = async () => {
   const folder = $("#uploadFolder").value.trim().replace(/^\/+|\/+$/g, "");
+  const creator = $("#uploadCreator").value.trim();
   const items = upload.queue.splice(0);
   const total = items.reduce((n, it) => n + it.file.size, 0) || 1;
   const bar = $("#uploadProgress");
@@ -541,6 +629,12 @@ $("#uploadBtn").onclick = async () => {
   }
   bar.classList.add("hidden");
   upload.busy = false; upload.skipped = 0;
+  const done = items.filter((it) => !failed.some((f) => f.startsWith(`${it.rel}: `)));
+  if (creator && done.length) {  // stored as a correction rule, so it survives re-indexing
+    const prefixes = [...new Set(done.map((it) => topPrefix(folder, it.rel)))];
+    try { await api("/api/overrides", { method: "POST", body: JSON.stringify({ prefixes, creator }) }); }
+    catch (err) { failed.push(`creator: ${err.message}`); }
+  }
   if (saved) { await api("/api/index", { method: "POST" }); wasRunning = true; }
   renderQueue(`Uploaded ${saved} file${saved === 1 ? "" : "s"}${existed ? `, ${existed} already in the library` : ""}${failed.length ? `, ${failed.length} failed` : ""}.` +
     (saved ? " Indexing now; previews follow in the background." : ""));

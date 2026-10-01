@@ -115,6 +115,20 @@ rcm = next(m for m in get("/api/models")["items"] if m["model"] == "Rat Commande
 assert rcm["cover_image"], "pictures follow a renamed model"
 print("tags ok")
 
+# Creators: set on releases in bulk, filter and search by them, clear one.
+assert post("/api/releases/creator", {"releases": ["Dragon Lords", "Goblin Warband"], "creator": " Mini  Forge "})["creator"] == "Mini Forge"
+assert post("/api/releases/creator", {"releases": ["Bits Pack"], "creator": "mini forge"})["creator"] == "Mini Forge"
+creators = {c["creator"]: c["releases"] for c in get("/api/creators")}
+assert creators.get("Mini Forge") == 3 and "" in creators, creators
+assert names("/api/models?creator=Mini%20Forge") == ["Goblin Boss", "Knight", "Orc Warboss", "Red Dragon"]
+assert "Rat Commander" in names("/api/models?creator=")
+assert names("/api/models?q=forge&release=Dragon%20Lords") == ["Knight", "Red Dragon"]
+assert {r["release"]: r["creator"] for r in get("/api/releases?creator=Mini%20Forge")} == \
+    {"Dragon Lords": "Mini Forge", "Goblin Warband": "Mini Forge", "Bits Pack": "Mini Forge"}
+post("/api/releases/creator", {"releases": ["Bits Pack"], "creator": ""})
+assert {c["creator"]: c["releases"] for c in get("/api/creators")}["Mini Forge"] == 2
+print("creators ok")
+
 # Re-import copies nothing new, and the source library is unchanged.
 post("/api/import")
 time.sleep(0.5)
@@ -122,6 +136,7 @@ s = wait_job()
 assert "Imported 0 files" in s["job"]["last"]["message"], s["job"]["last"]
 assert snapshot() == before, "source library changed!"
 print("source untouched, re-import skipped existing files")
+assert get(f"/api/models/{models['Knight']['id']}")["creator"] == "Mini Forge", "creator lost on re-index"
 
 # Uploads from the browser: a loose file into a folder, a release archive, duplicates and bad paths.
 import io, urllib.error, urllib.parse, zipfile
@@ -156,10 +171,13 @@ for bad in ("../escape.stl", "/abs/../../x.stl", "notes.txt", ".hidden/x.stl"):
         raise SystemExit(f"upload of {bad!r} was accepted")
     except urllib.error.HTTPError as e:
         assert e.code == 400, (bad, e.code)
+post("/api/overrides", {"prefixes": ["Tank Pack"], "creator": "Tank Works"})  # the Import dialog's Creator field
 post("/api/index")
 time.sleep(0.5)
 wait_job()
 models = {(m["release"], m["model"]): m for m in get("/api/models")["items"]}
+assert models[("Tank Pack", "Hover Tank")]["creator"] == "Tank Works"
+assert models[("Uploaded Release", "Gnome")]["creator"] == ""
 assert ("Uploaded Release", "Gnome") in models, sorted(models)
 assert models[("Uploaded Release", "Gnome")]["cover_image"], "uploaded picture used as cover"
 tank = models[("Tank Pack", "Hover Tank")]

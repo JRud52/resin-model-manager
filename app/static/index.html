@@ -31,6 +31,8 @@
 </header>
 <div id="layout">
   <aside id="sidebar">
+    <div class="side-title">Creators <button id="editCreatorsBtn" class="link" title="Set the creator of several releases">Edit</button></div>
+    <ul id="creators"></ul>
     <div class="side-title">Releases</div>
     <ul id="releases"></ul>
     <div class="side-title">Tags</div>
@@ -41,6 +43,7 @@
       <div id="crumbs"></div>
       <div id="activeTags" class="badges"></div>
       <div class="spacer"></div>
+      <button id="releaseCreatorBtn" class="hidden">Set creator</button>
       <button id="releaseTagBtn" class="hidden">Tag all models in this release</button>
     </div>
     <div id="releaseImages" class="hidden"></div>
@@ -146,6 +149,9 @@
       <input id="uploadFolder" list="releaseList" placeholder="e.g. the release name" autocomplete="off">
     </label>
     <p class="muted small">Archives and folders keep their own names inside it. Without a folder, each archive or folder becomes its own release.</p>
+    <label>Creator (optional)
+      <input id="uploadCreator" list="creatorOptions" placeholder="e.g. who made these models" autocomplete="off">
+    </label>
     <div id="uploadQueue" class="muted small"></div>
     <progress id="uploadProgress" class="hidden" max="1" value="0"></progress>
     <div class="row">
@@ -195,10 +201,25 @@
   </form>
 </dialog>
 
+<dialog id="creatorDlg">
+  <form method="dialog" class="card-form">
+    <div class="dlg-head"><h3>Set creator</h3><div class="spacer"></div><button class="icon" value="cancel" formnovalidate>✕</button></div>
+    <label>Creator <input name="creator" list="creatorOptions" autocomplete="off" placeholder="Leave blank to go back to the folder guess"></label>
+    <input name="filter" type="search" placeholder="Filter releases…" autocomplete="off">
+    <div id="creatorReleases"></div>
+    <p class="muted small" id="creatorCount"></p>
+    <div class="row">
+      <button value="save" class="primary">Save</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
 <div id="version" class="muted"></div>
 
 <datalist id="releaseList"></datalist>
 <datalist id="tagOptions"></datalist>
+<datalist id="creatorOptions"></datalist>
 <datalist id="modelList"></datalist>
 <script type="module" src="/static/app.js"></script>
 </body>
