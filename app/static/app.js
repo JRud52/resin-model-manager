@@ -123,17 +123,39 @@ async function loadReleaseImages() {
   const release = state.release;
   const imgs = release === null ? [] : await api(`/api/releases/images?release=${encodeURIComponent(release)}`);
   if (release !== state.release) return;
-  el.innerHTML = `<div class="side-title">Release pictures</div><div class="strip">` + imgs.map((i) => `<button class="rimg" data-full="/api/images/${i.id}/full" data-name="${esc(i.name)}" title="${esc(i.path)}">
+  state.releaseImages = imgs;
+  el.innerHTML = `<div class="side-title">Release pictures</div><div class="strip">` + imgs.map((i) => `<button class="rimg" data-pic="${i.id}" title="${esc(i.path)}">
     <img loading="lazy" src="/api/images/${i.id}/preview" alt="${esc(i.name)}" onerror="this.parentElement.remove()"></button>`).join("") + `</div>`;
   el.classList.toggle("hidden", !imgs.length);
 }
 $("#releaseImages").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-full]"); if (!b) return;
-  $("#lightboxImg").src = b.dataset.full;
-  $("#lightboxName").textContent = b.dataset.name;
-  $("#lightbox").showModal();
+  const b = e.target.closest("[data-pic]");
+  if (b) openPicture(state.releaseImages.find((i) => i.id === +b.dataset.pic));
 });
-$("#lightbox").addEventListener("click", () => $("#lightbox").close());
+
+// Full-size picture, with a picker to attach it to a model of its release (or to the release).
+async function openPicture(pic) {
+  state.picture = pic;
+  $("#lightboxImg").src = `/api/images/${pic.id}/full`;
+  $("#lightboxName").textContent = pic.name;
+  const sel = $("#lightboxModel");
+  sel.innerHTML = `<option value="">Whole release</option>`;
+  $("#lightbox").showModal();
+  const res = await api(`/api/models?${new URLSearchParams({ release: pic.release, limit: 1000 })}`);
+  if (state.picture !== pic) return;
+  sel.innerHTML += res.items.map((m) => `<option value="${esc(m.id)}">${esc(m.model)}</option>`).join("");
+  sel.value = pic.scope === "model" ? pic.model_id : "";
+  sel.models = res.items;
+}
+$("#lightbox").addEventListener("click", (e) => { if (!e.target.closest(".lb-bar")) $("#lightbox").close(); });
+$("#lightboxModel").addEventListener("change", async (e) => {
+  const pic = state.picture;
+  const m = e.target.models.find((x) => x.id === e.target.value);
+  await api("/api/overrides", { method: "POST", body: JSON.stringify({ prefixes: [pic.path], release: pic.release, model: m ? m.model : "" }) });
+  $("#lightbox").close();
+  refresh();
+  if ($("#modelDlg").open) { try { await openModel(state.model.id); } catch { $("#modelDlg").close(); } }
+});
 
 $("#more").onclick = () => { state.offset += PAGE; loadModels(true); };
 $("#grid").addEventListener("click", (e) => { const c = e.target.closest(".card"); if (c) openModel(c.dataset.id); });
@@ -284,6 +306,7 @@ async function openModel(id) {
         <div class="fname"><div title="${esc(i.path)}">${esc(i.name)}</div>
           <div class="muted small">${i.scope === "release" ? "Release picture" : "Model picture"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
         <a href="/api/images/${i.id}/full" target="_blank" rel="noopener" title="Open full size">↗</a>
+        <button data-pic-edit="${i.id}" title="Choose which model this picture belongs to">✎</button>
       </div>`).join("") : "";
   $("#mFiles").innerHTML = pics + keys.map((k) => {
     const [opt, sup] = k.split("\u0000");
@@ -334,6 +357,8 @@ $("#mFiles").addEventListener("click", (e) => {
   if (e.target.closest("a")) return;
   const edit = e.target.closest("[data-edit]");
   if (edit) { openFileEdit(state.model.files.find((f) => f.id === +edit.dataset.edit)); return; }
+  const picEdit = e.target.closest("[data-pic-edit]");
+  if (picEdit) { openPicture(state.model.images.find((i) => i.id === +picEdit.dataset.picEdit)); return; }
   const pic = e.target.closest("[data-img]");
   if (pic) { showImage(state.model.images.find((i) => i.id === +pic.dataset.img)); return; }
   const row = e.target.closest(".file");
@@ -460,7 +485,7 @@ $("#rulesBtn").onclick = async () => {
   $("#rulesTable").innerHTML = rules.length ? `<tr><th>Path</th><th>Change</th><th></th></tr>` + rules.map((r) => {
     const ch = [];
     if (r.release != null) ch.push(`release → ${esc(r.release)}`);
-    if (r.model != null) ch.push(`model → ${esc(r.model)}`);
+    if (r.model != null) ch.push(r.model === "" ? "picture → whole release" : `model → ${esc(r.model)}`);
     if (r.option != null) ch.push(`option → ${esc(r.option)}`);
     if (r.creator != null) ch.push(`creator → ${esc(r.creator)}`);
     if (r.supported != null) ch.push(sup[r.supported]);

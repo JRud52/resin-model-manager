@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -424,33 +425,53 @@ _IMAGE_WORDS = {
 _COVER_WORDS = {"cover", "main", "hero", "promo", "preview", "thumbnail", "thumb", "showcase"}
 
 
-def _name_key(stem: str) -> str:
-    words = [w for w in classify.strip_tokens(stem).split() if w not in _IMAGE_WORDS]
-    while words and words[-1].isdigit():
-        words.pop()
-    return " ".join(words)
+def _words(text: str, release: str = "") -> list[str]:
+    """Words that name a model: support/scale/format words, picture words like
+    "render", the release name and numbering ("01", "v2") are dropped."""
+    words = classify.strip_tokens(text, release).split()
+    return [w for w in words if w not in _IMAGE_WORDS and not re.fullmatch(r"v?\d+[a-z]?", w)]
 
 
-def _name_match(key: str, candidates: dict) -> tuple | None:
-    """The model whose name the picture's name is, or starts with (longest wins)."""
-    if not key:
+def _contains(hay: list[str], needle: list[str]) -> bool:
+    n = len(needle)
+    return any(hay[i:i + n] == needle for i in range(len(hay) - n + 1))
+
+
+def _name_match(words: list[str], candidates: dict) -> tuple | None:
+    """The model a picture's name (or folder name) points to.
+
+    The picture's words contain a model's name ("Red_Dragon_front", "DL_01_Red_Dragon";
+    longest name wins), or spelled without spaces ("reddragon"). Failing that, the
+    picture's words are the start of exactly one model's name ("Goblin" -> Goblin Boss).
+    """
+    if not words:
         return None
     best = None
+    compact = "".join(words)
     for k, info in candidates.items():
-        if (key == k or key.startswith(k + " ")) and (best is None or len(k) > len(best[0])):
-            best = (k, info)
-    return best[1] if best else None
+        kw = k.split()
+        if _contains(words, kw) or (len(k) >= 5 and compact.startswith(k.replace(" ", ""))):
+            if best is None or len(k) > len(best[0]):
+                best = (k, info)
+    if best:
+        return best[1]
+    if sum(len(w) for w in words) < 3:
+        return None
+    hits = {info for k, info in candidates.items() if k.split()[:len(words)] == words}
+    return hits.pop() if len(hits) == 1 else None
 
 
 def match_images(c, overrides):
     """Attach each picture to a model, or else to its release.
 
     * A picture inside a model's folder (at any depth) belongs to that model.
-    * Otherwise a picture named after a model belongs to it: first models whose
-      files sit loose in the same folder, then any model of the release
-      (``Release/Renders/Knight_front.jpg`` -> Knight).
+    * Otherwise a picture whose name, or a folder it sits in below the release,
+      names a model belongs to it: first models whose files sit loose in the same
+      folder, then any model of the release (``Release/Renders/Knight_front.jpg``
+      or ``Release/Images/Knight/01.jpg`` -> Knight).
     * Anything else is a release picture. When the release has a single model,
       release pictures also count as that model's pictures.
+    * A correction rule naming a model (or "" for the release) wins over all of that.
     """
     files = c.execute("SELECT logical_path, model, model_id, model_root, release, hidden FROM files").fetchall()
     roots: dict[str, tuple] = {}
@@ -460,44 +481,62 @@ def match_images(c, overrides):
     for f in files:
         info = (f["model_id"], f["release"], f["hidden"])
         lp = PurePosixPath(f["logical_path"])
+        keys = [" ".join(_words(f["model"], f["release"]))]
         if f["model_root"] != f["logical_path"]:
             roots.setdefault(f["model_root"], info)
-        else:
-            for k in (classify.strip_tokens(f["model"]), _name_key(lp.stem)):
+        else:  # loose files are also known by their own names ("Orc_Warboss_Body")
+            keys.append(" ".join(_words(lp.stem, f["release"])))
+            for k in keys:
                 if k:
                     loose[str(lp.parent)].setdefault(k, info)
-        k = classify.strip_tokens(f["model"])
-        if k:
-            by_release[f["release"]].setdefault(k, info)
+        for k in keys:
+            if k:
+                by_release[f["release"]].setdefault(k, info)
         if not f["hidden"]:
             release_models[f["release"]].add(f["model_id"])
 
+    known = {f["model_id"] for f in files}  # a picture rule naming a model that no longer exists is ignored
     updates = []
     layouts, default_depth = folder_layouts(), settings.get("release_depth")
     for r in c.execute("SELECT id, logical_path FROM images").fetchall():
         lp = PurePosixPath(r["logical_path"])
         folders = list(lp.parent.parts)
-        key = _name_key(lp.stem)
-        release = classify.guess(r["logical_path"], depth_for(r["logical_path"], layouts, default_depth)).release
-        hidden = 0
+        depth = depth_for(r["logical_path"], layouts, default_depth)
+        release = classify.guess(r["logical_path"], depth).release
+        release_raw = folders[depth] if len(folders) > depth else ""
+        hidden, forced = 0, None
         for o in overrides:
             pre = o["prefix"]
             if r["logical_path"] == pre or r["logical_path"].startswith(pre.rstrip("/") + "/"):
                 release = o["release"] if o["release"] is not None else release
                 hidden = o["hidden"] if o["hidden"] is not None else hidden
-        info = next((roots[p] for p in ("/".join(folders[:i]) for i in range(len(folders), 0, -1)) if p in roots),
-                    None)
-        info = info or _name_match(key, loose.get(str(lp.parent), {})) or _name_match(key, by_release.get(release, {}))
+                forced = o["model"] if o["model"] is not None else forced
         cover = bool(_COVER_WORDS & set(classify.norm(lp.stem).split()))
         rank = (0 if cover else 100) + len(folders)
+        if forced is not None and (not forced or model_id(release, forced) in known):
+            info = (model_id(release, forced), release, 0) if forced else None
+        else:
+            info = next((roots[p] for p in ("/".join(folders[:i]) for i in range(len(folders), 0, -1))
+                         if p in roots), None)
+            names = [_words(lp.stem, release_raw)] + [_words(f, release_raw) for f in reversed(folders[depth + 1:])]
+            info = (info or _name_match(names[0], loose.get(str(lp.parent), {}))
+                    or next(filter(None, (_name_match(n, by_release.get(release, {})) for n in names)), None))
         if info:
             mid, release, model_hidden = info
             updates.append((release, mid, "model", rank, int(hidden or model_hidden), r["id"]))
         else:
             only = release_models.get(release, set())
-            mid = next(iter(only)) if len(only) == 1 else ""
+            mid = next(iter(only)) if len(only) == 1 and forced != "" else ""
             updates.append((release, mid, "release", rank, hidden, r["id"]))
     c.executemany("UPDATE images SET release=?, model_id=?, scope=?, rank=?, hidden=? WHERE id=?", updates)
+
+
+def rematch_images():
+    """Re-attach pictures to models (cheap; run at startup so matching changes apply)."""
+    c = db.conn()
+    overrides = sorted(c.execute("SELECT * FROM overrides").fetchall(), key=lambda r: len(r["prefix"]))
+    match_images(c, overrides)
+    c.commit()
 
 
 def _ids_in_chunks(q: str, ids: list[str]):
@@ -519,6 +558,7 @@ def cover_image_ids(model_ids: list[str]) -> dict[str, int]:
 
 def _image_dict(r):
     return {"id": r["id"], "name": r["name"], "path": r["logical_path"], "scope": r["scope"],
+            "release": r["release"], "model_id": r["model_id"],
             "archive": r["rel_path"] if r["member"] else None, "size": r["size"]}
 
 

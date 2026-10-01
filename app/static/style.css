@@ -131,7 +131,8 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 .rimg { padding: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #16191d; flex-shrink: 0; cursor: zoom-in; }
 .rimg:hover { border-color: var(--accent); }
 .rimg img { display: block; height: 160px; width: auto; max-width: 320px; object-fit: cover; }
-#lightbox { padding: 8px; max-width: 95vw; max-height: 95vh; cursor: zoom-out; }
+#lightbox { padding: 8px; width: fit-content; min-width: 420px; max-width: 95vw; max-height: 95vh; cursor: zoom-out; }
 #lightbox img { display: block; max-width: calc(95vw - 16px); max-height: calc(95vh - 48px); object-fit: contain; }
-#lightbox div { padding: 6px 2px 0; }
+#lightbox .lb-bar { display: flex; align-items: center; gap: 10px; padding: 8px 2px 0; cursor: default; }
+#lightbox .lb-bar select { margin-left: 6px; max-width: 260px; }
 .file img.photo { object-fit: cover; }

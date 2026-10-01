@@ -63,12 +63,15 @@ groups them by **release** and **model**, separates **supported** and
 * **Bundled preview pictures.** JPG, PNG, WebP, GIF and BMP pictures that come
   with a release or model (loose, or inside its `.zip` / `.7z`) are indexed and
   shown before rendered STL previews. A picture inside a model's folder belongs
-  to that model. Otherwise a picture named after a model belongs to it
-  (`Knight_front.jpg` next to `Knight.stl`, or in a `Renders` folder of the
-  release). Anything else is a release picture, shown above the models when the
-  release is selected; in a release with only one model it is also that
-  model's cover. Pictures named `cover`, `main`, `promo` or `preview` are
-  picked first.
+  to that model. Otherwise a picture whose name, or a folder it sits in, names a
+  model belongs to it, even with extra words around the name
+  (`Knight_front.jpg`, `DL_RedDragon_Promo.jpg`, `Images/Knight/01.jpg`,
+  `02_rat_trooper_painted.png`). Anything else is a release picture, shown above
+  the models when the release is selected; in a release with only one model it
+  is also that model's cover. Pictures named `cover`, `main`, `promo` or
+  `preview` are picked first. If a picture lands in the wrong place, open it and
+  pick the model it belongs to (or *Whole release*) under *Belongs to*; this is
+  saved as a correction rule.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
 

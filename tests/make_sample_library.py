@@ -61,4 +61,10 @@ wpic("Dragon Lords/Renders/Knight_front.jpg", "silver")                   # name
 wpic("Bits Pack/Orc_Warboss.jpg", "olive")                                # next to loose files
 wpic("Goblin Warband/goblin_banner.png", "brown", "PNG")                  # single-model release
 (root / "Bits Pack/broken.png").write_bytes(b"not a picture")
+# Model pictures kept at release level, named in different ways.
+wpic("Dragon Lords/Images/DL_RedDragon_Promo.jpg", "maroon")              # prefix + CamelCase
+wpic("Dragon Lords/Images/Knight/01.jpg", "gray")                         # folder named after the model
+wpic("Dragon Lords/Dragon Lords - Knight.jpg", "white")                   # release name + model
+wpic("Space Rats/previews/02_rat_trooper_painted.png", "yellow", "PNG")   # numbering + picture words
+wpic("Bits Pack/orc.jpg", "lime")                                         # start of one model's name
 print("sample library at", root)
