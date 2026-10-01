@@ -1,4 +1,4 @@
-# Only the app's folder, your NAS user and the port are set here; everything
+# Only the app's folders, your NAS user and the port are set here; everything
 # else is in the app's Settings (⚙). In Portainer, set these under the stack's
 # "Environment variables"; with plain docker compose, put them in a `.env` file
 # next to this one (see .env.example). Unset values use the defaults shown.
@@ -13,9 +13,13 @@ services:
     ports:
       - "${PORT:-8417}:8417"
     volumes:
-      # The app's own folder (create it first, owned by your NAS user). Imported
-      # files go in library/, the database and preview cache in data/.
-      - ${STORAGE_PATH:-/volume1/resin-manager}:/storage
+      # Create both folders first, owned by your NAS user. They can be on
+      # different shares. (Stacks set up before the split only set STORAGE_PATH;
+      # they keep using its data/ and library/ folders until these are set.)
+      # The app's own data: database, settings and preview image cache.
+      - ${DATA_PATH:-${STORAGE_PATH:-/volume1/resin-manager}/data}:/data
+      # Your model files: everything you import is copied here.
+      - ${LIBRARY_PATH:-${STORAGE_PATH:-/volume1/resin-manager}/library}:/library
       # Optional: set SOURCE_PATH to an existing library on the NAS to copy it
       # in from the Import dialog. Read-only, so the app can never change those
       # files. Left unset, an empty placeholder volume is mounted instead.

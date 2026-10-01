@@ -11,10 +11,22 @@ def _int(name: str, default: int) -> int:
 
 # Your existing library. Mounted read-only; only ever read during import.
 SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", "/source"))
+
+
+def _dir(name: str, default: str, legacy: str) -> Path:
+    """An env override, else the default mount. Containers still started with
+    the old single /storage mount (library/ + data/ inside it) keep using it."""
+    if os.environ.get(name):
+        return Path(os.environ[name])
+    if not os.path.ismount(default) and Path(legacy).is_dir():
+        return Path(legacy)
+    return Path(default)
+
+
 # The managed copy the app indexes and serves.
-LIBRARY_DIR = Path(os.environ.get("LIBRARY_DIR", "/library"))
-# Database and preview image cache.
-DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+LIBRARY_DIR = _dir("LIBRARY_DIR", "/library", "/storage/library")
+# Database, settings and preview image cache.
+DATA_DIR = _dir("DATA_DIR", "/data", "/storage/data")
 
 # How many folder levels sit above the release folder (e.g. 1 for Creator/Release/...).
 RELEASE_DEPTH = _int("RELEASE_DEPTH", 0)

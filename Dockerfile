@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    SOURCE_DIR=/source LIBRARY_DIR=/storage/library DATA_DIR=/storage/data
+    SOURCE_DIR=/source
 
 WORKDIR /srv
 COPY requirements.txt .
@@ -13,7 +13,7 @@ COPY app ./app
 ARG PUID=1000
 ARG PGID=1000
 RUN groupadd -g ${PGID} rmm && useradd -u ${PUID} -g ${PGID} -M rmm \
-    && mkdir -p /storage && chown rmm:rmm /storage
+    && mkdir -p /library /data && chown rmm:rmm /library /data
 USER rmm
 
 # Short git commit shown next to the version in the UI (set by the CI build).
