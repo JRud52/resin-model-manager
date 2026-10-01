@@ -140,7 +140,9 @@ folder*.
 
 The ⚙ button in the header holds the rest: the layout of a library copied
 from the NAS folder (`Release/...` or `Creator/Release/...`; browser imports
-don't use it), background rendering,
+don't use it), your preferred file format and supported/unsupported version
+(the model window shows only those by default, with buttons to switch to the
+others; models without them show what they have), background rendering,
 render threads, preview size and the preview size limit. They are saved in the
 database, so they survive updates. Changing the folder setting regroups the
 library; changing the preview size re-renders the previews.

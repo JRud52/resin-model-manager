@@ -4,7 +4,7 @@ import logging
 import mimetypes
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -66,7 +66,7 @@ def get_settings():
 
 
 @app.put("/api/settings")
-def put_settings(changes: dict[str, int]):
+def put_settings(changes: dict[str, Union[int, str]]):
     try:
         changed = settings.update(changes)
     except ValueError as e:

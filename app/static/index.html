@@ -87,6 +87,7 @@
       </div>
     </div>
     <div class="files">
+      <div id="mFilter" class="file-filter"></div>
       <form id="editForm" class="hidden card-form">
         <label>Model name <input name="model"></label>
         <label>Release <input name="release" list="releaseList"></label>
@@ -180,6 +181,26 @@
         <option value="2">2: Group / Creator / Release / Model / files</option>
       </select>
     </label>
+    <label>Preferred file format
+      <select name="preferred_format">
+        <option value="stl">STL</option>
+        <option value="lys">LYS (Lychee)</option>
+        <option value="ctx">CTX</option>
+        <option value="ctb">CTB</option>
+        <option value="chitubox">CHITUBOX</option>
+        <option value="3mf">3MF</option>
+        <option value="obj">OBJ</option>
+        <option value="">No preference (show all)</option>
+      </select>
+    </label>
+    <label>Preferred version
+      <select name="preferred_support">
+        <option value="supported">Supported</option>
+        <option value="unsupported">Unsupported</option>
+        <option value="">No preference (show both)</option>
+      </select>
+    </label>
+    <p class="muted small">The model window shows only your preferred format and version, with buttons to switch to the others. Models that don't have it show what they do have.</p>
     <label class="check"><input type="checkbox" name="prerender"> Render all previews in the background</label>
     <label>Background render threads <input name="preview_workers" type="number" min="1" max="8" required></label>
     <label>Preview size (pixels) <input name="preview_size" type="number" min="128" max="2048" step="64" required></label>
