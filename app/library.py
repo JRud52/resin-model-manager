@@ -11,7 +11,7 @@ import traceback
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
 
-from . import archives, classify, config, db, render
+from . import archives, classify, config, db, render, settings
 
 log = logging.getLogger("rmm")
 
@@ -49,6 +49,7 @@ class Job:
 
 job = Job()
 _preview_wakeup = threading.Event()
+_reindex_wanted = threading.Event()
 
 
 def run_job(name: str, fn) -> bool:
@@ -64,15 +65,81 @@ def run_job(name: str, fn) -> bool:
             job.message = f"Failed: {e}"
             job.finish(traceback.format_exc())
         _preview_wakeup.set()
+        if _reindex_wanted.is_set():
+            request_reindex()
 
     threading.Thread(target=wrapper, daemon=True).start()
     return True
 
 
-# ---------------------------------------------------------------- import
+def request_reindex():
+    """Index the library now, or as soon as the running job finishes."""
+    _reindex_wanted.set()
+    if run_job("index", scan):
+        _reindex_wanted.clear()
+
+
+# ---------------------------------------------------------------- upload
+
+UPLOAD_EXTS = config.MODEL_EXTS | config.ARCHIVE_EXTS
+
+
+def upload_target(rel: str) -> Path:
+    """Validate a browser-supplied relative path and return where it goes in the library."""
+    parts = [p for p in PurePosixPath(rel.replace("\\", "/")).parts if p not in ("", ".", "/")]
+    if not parts or any(p == ".." or p.startswith(".") for p in parts):
+        raise ValueError("invalid path")
+    if os.path.splitext(parts[-1])[1].lower() not in UPLOAD_EXTS:
+        raise ValueError(f"{parts[-1]}: not a model file or .zip/.7z archive")
+    lib = config.LIBRARY_DIR.resolve()
+    target = lib.joinpath(*parts).resolve()
+    if not target.is_relative_to(lib):
+        raise ValueError("invalid path")
+    return target
+
+
+async def save_upload(rel: str, size: int, chunks) -> dict:
+    """Stream an uploaded file into the library. An identical-size file already
+    there is kept as is; a different file with the same name gets a numbered name."""
+    target = upload_target(rel)
+    if target.exists():
+        if target.stat().st_size == size:
+            async for _ in chunks:
+                pass
+            return {"status": "exists", "path": target.relative_to(config.LIBRARY_DIR.resolve()).as_posix()}
+        stem, ext, n = target.stem, target.suffix, 2
+        while target.exists():
+            target = target.with_name(f"{stem} ({n}){ext}")
+            n += 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".rmm-partial")
+    written = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in chunks:
+                f.write(chunk)
+                written += len(chunk)
+        if size >= 0 and written != size:
+            raise ValueError(f"upload incomplete ({written} of {size} bytes)")
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"status": "saved", "path": target.relative_to(config.LIBRARY_DIR.resolve()).as_posix()}
+
+
+# ---------------------------------------------------------------- import from a NAS folder
 
 def _safe_rel(p: Path, root: Path) -> str:
     return p.relative_to(root).as_posix()
+
+
+def source_available() -> bool:
+    """True when an existing library is mounted at SOURCE_DIR (compose mounts an
+    empty placeholder volume there when SOURCE_PATH is not set)."""
+    try:
+        return config.SOURCE_DIR.is_dir() and any(config.SOURCE_DIR.iterdir())
+    except OSError:
+        return False
 
 
 def import_library():
@@ -82,8 +149,8 @@ def import_library():
     skipped, so re-running an import only copies what is new or changed.
     """
     src, dst = config.SOURCE_DIR.resolve(), config.LIBRARY_DIR.resolve()
-    if not src.is_dir():
-        raise RuntimeError(f"Source folder {src} does not exist")
+    if not source_available():
+        raise RuntimeError(f"No existing library is mounted at {src}")
     if src == dst or dst.is_relative_to(src) or src.is_relative_to(dst):
         raise RuntimeError("Source and library folders must be separate")
     job.message = "Counting files in source"
@@ -218,7 +285,7 @@ def reclassify():
     updates = []
     for r in rows:
         lp = r["logical_path"]
-        g = classify.guess(lp, config.RELEASE_DEPTH, by_folder[str(PurePosixPath(lp).parent)])
+        g = classify.guess(lp, settings.get("release_depth"), by_folder[str(PurePosixPath(lp).parent)])
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
         for o in overrides:
             pre = o["prefix"]
@@ -250,16 +317,16 @@ def reclassify():
 # ---------------------------------------------------------------- previews
 
 def cache_path(row) -> Path:
-    key = f"{row['rel_path']}\x00{row['member']}\x00{row['size']}\x00{row['mtime']}\x00{config.PREVIEW_SIZE}"
+    key = f"{row['rel_path']}\x00{row['member']}\x00{row['size']}\x00{row['mtime']}\x00{settings.get('preview_size')}"
     h = hashlib.sha1(key.encode()).hexdigest()
     return config.CACHE_DIR / h[:2] / f"{h}.webp"
 
 
 def _make_preview(row, data: bytes) -> bytes | None:
     if row["ext"] in config.RENDERABLE_EXTS:
-        return render.render_stl_bytes(data, config.PREVIEW_SIZE)
+        return render.render_stl_bytes(data, settings.get("preview_size"))
     if row["ext"] in config.THUMBNAIL_EXTS:
-        thumb = render.embedded_thumbnail(data, config.PREVIEW_SIZE)
+        thumb = render.embedded_thumbnail(data, settings.get("preview_size"))
         if thumb is None and data[:2] == b"PK":
             import io, zipfile
             try:
@@ -267,7 +334,7 @@ def _make_preview(row, data: bytes) -> bytes | None:
                     imgs = [i for i in z.infolist() if i.filename.lower().endswith((".png", ".jpg", ".jpeg"))]
                     if imgs:
                         best = max(imgs, key=lambda i: i.file_size)
-                        thumb = render.embedded_thumbnail(z.read(best), config.PREVIEW_SIZE)
+                        thumb = render.embedded_thumbnail(z.read(best), settings.get("preview_size"))
             except zipfile.BadZipFile:
                 pass
         return thumb
@@ -314,14 +381,14 @@ def preview_for(file_id: int) -> Path | None:
 
 
 def _too_big(row) -> bool:
-    return row["size"] > config.MAX_PREVIEW_MB * 1024 * 1024
+    return row["size"] > settings.get("max_preview_mb") * 1024 * 1024
 
 
 def _render_rows(rows):
     """Render previews for rows that share one physical file or archive."""
     rows = [r for r in rows if not cache_path(r).exists()]
     for r in [r for r in rows if _too_big(r)]:
-        _store(r, None, f"larger than MAX_PREVIEW_MB ({config.MAX_PREVIEW_MB} MB)")
+        _store(r, None, f"larger than the {settings.get('max_preview_mb')} MB preview limit")
     rows = [r for r in rows if not _too_big(r)]
     if not rows:
         return
@@ -373,12 +440,14 @@ def cover_file_ids(model_ids: list[str] | None = None) -> dict[str, int]:
 preview_state = {"current": None}
 
 
-def preview_worker():
-    """Background renderer. Model covers first, then every other file."""
+def preview_worker(index: int = 0):
+    """Background renderer. Model covers first, then every other file.
+
+    MAX_WORKERS of these are started; only the first `preview_workers` do work."""
     while True:
         _preview_wakeup.wait(timeout=60)
         _preview_wakeup.clear()
-        if not config.PRERENDER:
+        if not settings.get("prerender") or index >= settings.get("preview_workers"):
             continue
         try:
             _render_pending()
@@ -403,9 +472,15 @@ def _render_pending():
         _render_rows(rows)
 
 
-def scheduler():
-    if config.SCAN_INTERVAL_MINUTES <= 0:
-        return
-    while True:
-        time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
-        run_job("scan", scan)
+def apply_settings_change(changed: dict):
+    """Catch the library up after settings were changed in the app."""
+    c = db.conn()
+    if "preview_size" in changed:
+        c.execute("UPDATE files SET preview='pending' WHERE preview='ok'")
+    if "max_preview_mb" in changed:
+        c.execute("UPDATE files SET preview='pending', preview_error=NULL "
+                  "WHERE preview='error' AND preview_error LIKE 'larger than%'")
+    c.commit()
+    if "release_depth" in changed:
+        request_reindex()
+    _preview_wakeup.set()

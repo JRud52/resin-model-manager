@@ -2,7 +2,7 @@
 
     python tests/make_sample_library.py /tmp/rmm/src
     (start the app with SOURCE_DIR=/tmp/rmm/src)
-    python tests/smoke_test.py http://localhost:8080 /tmp/rmm/src
+    python tests/smoke_test.py http://localhost:8417 /tmp/rmm/src
 """
 import hashlib
 import json
@@ -99,6 +99,45 @@ s = wait_job()
 assert "Imported 0 files" in s["job"]["last"]["message"], s["job"]["last"]
 assert snapshot() == before, "source library changed!"
 print("source untouched, re-import skipped existing files")
+
+# Uploads from the browser: a loose file into a folder, a release archive, duplicates and bad paths.
+import io, urllib.error, urllib.parse, zipfile
+sys.path.insert(0, str(Path(__file__).parent))
+import meshes as M
+
+
+def put(path, data):
+    q = urllib.parse.urlencode({"path": path, "size": len(data)})
+    req = urllib.request.Request(f"{BASE}/api/upload?{q}", data=data, method="PUT")
+    return json.load(urllib.request.urlopen(req))
+
+
+import tempfile
+with tempfile.TemporaryDirectory() as td:
+    M.write_stl(Path(td) / "s.stl", M.sphere(8, 40))
+    stl = (Path(td) / "s.stl").read_bytes()
+zbuf = io.BytesIO()
+with zipfile.ZipFile(zbuf, "w") as z:
+    z.writestr("Hover Tank/Supported/Hover_Tank.stl", stl)
+    z.writestr("Hover Tank/Unsupported/Hover_Tank.stl", stl)
+assert put("Uploaded Release/Gnome/Gnome.stl", stl)["status"] == "saved"
+assert put("Tank Pack.zip", zbuf.getvalue())["status"] == "saved"
+assert put("Uploaded Release/Gnome/Gnome.stl", stl)["status"] == "exists"
+assert put("Uploaded Release/Gnome/Gnome.stl", stl + b"\0")["path"] == "Uploaded Release/Gnome/Gnome (2).stl"
+for bad in ("../escape.stl", "/abs/../../x.stl", "notes.txt", ".hidden/x.stl"):
+    try:
+        put(bad, stl)
+        raise SystemExit(f"upload of {bad!r} was accepted")
+    except urllib.error.HTTPError as e:
+        assert e.code == 400, (bad, e.code)
+post("/api/index")
+time.sleep(0.5)
+wait_job()
+models = {(m["release"], m["model"]): m for m in get("/api/models")["items"]}
+assert ("Uploaded Release", "Gnome") in models, sorted(models)
+tank = models[("Tank Pack", "Hover Tank")]
+assert tank["supported_files"] == 1 and tank["unsupported_files"] == 1, tank
+print("uploads ok")
 
 for _ in range(120):
     pv = get("/api/status")["previews"]

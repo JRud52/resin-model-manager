@@ -75,7 +75,7 @@ async function loadModels(append = false) {
   if (!state.total) {
     const st = await api("/api/status");
     empty.innerHTML = st.files ? "No models match." :
-      `Your library is empty.<br><br>Click <b>Import library</b> to copy files from <code>${esc(st.source_dir)}</code> into <code>${esc(st.library_dir)}</code>.<br>Your original files are only read, never changed.`;
+      `Your library is empty.<br><br>Click <b>Import files</b>, or drop model files, folders or .zip / .7z archives anywhere on this page.`;
     empty.classList.remove("hidden");
   } else empty.classList.add("hidden");
 }
@@ -350,6 +350,37 @@ $("#rulesTable").addEventListener("click", async (e) => {
 });
 $("#retryBtn").onclick = async () => { await api("/api/previews/retry", { method: "POST" }); $("#retryBtn").textContent = "Queued"; };
 
+// ------------------------------------------------------------ settings
+
+function setSelect(sel, value) {
+  // Keep values saved outside the presets (e.g. from an old env var) selectable.
+  if (![...sel.options].some((o) => o.value === String(value))) sel.add(new Option(String(value), value));
+  sel.value = value;
+}
+$("#settingsBtn").onclick = async () => {
+  const s = await api("/api/settings");
+  const f = $("#settingsForm");
+  setSelect(f.release_depth, s.release_depth);
+  f.prerender.checked = !!s.prerender;
+  f.preview_workers.value = s.preview_workers;
+  f.preview_size.value = s.preview_size;
+  f.max_preview_mb.value = s.max_preview_mb;
+  $("#settingsErr").textContent = "";
+  $("#settingsDlg").showModal();
+};
+$("#settingsForm").addEventListener("submit", async (e) => {
+  if (e.submitter?.value !== "save") return;
+  e.preventDefault();
+  const f = e.target;
+  const body = { prerender: f.prerender.checked ? 1 : 0 };
+  for (const k of ["release_depth", "preview_workers", "preview_size", "max_preview_mb"]) body[k] = Number(f[k].value);
+  try {
+    await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+    $("#settingsDlg").close();
+    wasRunning = true;
+  } catch (err) { $("#settingsErr").textContent = err.message; }
+});
+
 // ------------------------------------------------------------ jobs & status
 
 let wasRunning = false;
@@ -369,19 +400,113 @@ async function pollStatus() {
     }
     el.title = el.textContent;
     $("#version").textContent = `v${s.version}${s.commit ? ` (${s.commit})` : ""}`;
-    $("#importBtn").disabled = $("#scanBtn").disabled = !!j.running;
-    $("#importBtn").title = s.source_available ? `Copy ${s.source_dir} into ${s.library_dir}` : `${s.source_dir} is not mounted`;
+    $("#sourceImportBtn").disabled = !!j.running;
+    $("#sourceImport").classList.toggle("hidden", !s.source_available);
+    $("#sourceDir").textContent = s.source_dir;
     if (wasRunning && !j.running) refresh();
     wasRunning = !!j.running;
     setTimeout(pollStatus, j.running ? 1000 : 4000);
   } catch { setTimeout(pollStatus, 5000); }
 }
 
-$("#importBtn").onclick = async () => {
-  if (!confirm("Copy your existing library into the managed library folder? Originals are only read, never modified. Files already copied are skipped.")) return;
+// ------------------------------------------------------------ import (upload)
+
+const UPLOAD_EXTS = [".stl", ".lys", ".ctx", ".ctb", ".chitubox", ".obj", ".3mf", ".zip", ".7z"];
+const upload = { queue: [], skipped: 0, busy: false };
+const extOf = (n) => (n.match(/\.[^.]+$/)?.[0] || "").toLowerCase();
+
+function addToQueue(items) { // items: [{ file, rel }]
+  for (const it of items) {
+    const name = it.rel.split("/").pop();
+    if (name.startsWith(".") || !UPLOAD_EXTS.includes(extOf(name))) upload.skipped++;
+    else upload.queue.push(it);
+  }
+  renderQueue();
+}
+function renderQueue(msg) {
+  const q = upload.queue;
+  const total = q.reduce((n, it) => n + it.file.size, 0);
+  $("#uploadQueue").textContent = msg ?? (q.length
+    ? `${q.length} file${q.length > 1 ? "s" : ""} ready (${fmtSize(total)})${upload.skipped ? `, ${upload.skipped} ignored (not model files or archives)` : ""}.`
+    : upload.skipped ? `${upload.skipped} ignored (not model files or archives).` : "");
+  $("#uploadBtn").disabled = upload.busy || !q.length;
+  $("#clearQueue").disabled = upload.busy || !q.length;
+}
+function openImport() { if (!$("#importDlg").open) $("#importDlg").showModal(); renderQueue(); }
+$("#importBtn").onclick = openImport;
+$("#pickFiles").onclick = () => $("#fileInput").click();
+$("#pickFolder").onclick = () => $("#folderInput").click();
+$("#fileInput").onchange = (e) => { addToQueue([...e.target.files].map((f) => ({ file: f, rel: f.name }))); e.target.value = ""; };
+$("#folderInput").onchange = (e) => { addToQueue([...e.target.files].map((f) => ({ file: f, rel: f.webkitRelativePath || f.name }))); e.target.value = ""; };
+$("#clearQueue").onclick = () => { upload.queue = []; upload.skipped = 0; renderQueue(); };
+
+// Drag and drop anywhere on the page, folders included.
+async function entriesToItems(entry, prefix = "") {
+  if (entry.isFile) return [{ file: await new Promise((ok, err) => entry.file(ok, err)), rel: prefix + entry.name }];
+  const reader = entry.createReader(), out = [];
+  for (;;) {
+    const batch = await new Promise((ok, err) => reader.readEntries(ok, err));
+    if (!batch.length) break;
+    for (const e of batch) out.push(...await entriesToItems(e, `${prefix}${entry.name}/`));
+  }
+  return out;
+}
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+window.addEventListener("dragenter", (e) => { if (hasFiles(e)) { dragDepth++; document.body.classList.add("dragging"); } });
+window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener("drop", async (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0; document.body.classList.remove("dragging");
+  const entries = [...e.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  const items = [];
+  if (entries.length) for (const en of entries) items.push(...await entriesToItems(en));
+  else items.push(...[...e.dataTransfer.files].map((f) => ({ file: f, rel: f.name })));
+  openImport();
+  addToQueue(items);
+});
+
+function putFile(path, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("PUT", `/api/upload?path=${encodeURIComponent(path)}&size=${file.size}`);
+    x.upload.onprogress = (e) => onProgress(e.loaded);
+    x.onload = () => x.status < 300 ? resolve(JSON.parse(x.responseText))
+      : reject(new Error(JSON.parse(x.responseText || "{}").detail || x.statusText));
+    x.onerror = () => reject(new Error("network error"));
+    x.send(file);
+  });
+}
+$("#uploadBtn").onclick = async () => {
+  const folder = $("#uploadFolder").value.trim().replace(/^\/+|\/+$/g, "");
+  const items = upload.queue.splice(0);
+  const total = items.reduce((n, it) => n + it.file.size, 0) || 1;
+  const bar = $("#uploadProgress");
+  let sent = 0, saved = 0, existed = 0;
+  const failed = [];
+  upload.busy = true; bar.classList.remove("hidden"); bar.value = 0;
+  for (const [i, it] of items.entries()) {
+    renderQueue(`Uploading ${i + 1} of ${items.length}: ${it.rel}`);
+    try {
+      const r = await putFile(folder ? `${folder}/${it.rel}` : it.rel, it.file, (n) => (bar.value = (sent + n) / total));
+      r.status === "exists" ? existed++ : saved++;
+    } catch (err) { failed.push(`${it.rel}: ${err.message}`); }
+    sent += it.file.size;
+  }
+  bar.classList.add("hidden");
+  upload.busy = false; upload.skipped = 0;
+  if (saved) { await api("/api/index", { method: "POST" }); wasRunning = true; }
+  renderQueue(`Uploaded ${saved} file${saved === 1 ? "" : "s"}${existed ? `, ${existed} already in the library` : ""}${failed.length ? `, ${failed.length} failed` : ""}.` +
+    (saved ? " Indexing now; previews follow in the background." : ""));
+  if (failed.length) alert(`These files were not uploaded:\n\n${failed.join("\n")}`);
+};
+
+$("#sourceImportBtn").onclick = async () => {
+  if (!confirm("Copy everything in the NAS folder into the library? Originals are only read, never modified. Files already copied are skipped.")) return;
   try { await api("/api/import", { method: "POST" }); wasRunning = true; } catch (e) { alert(e.message); }
 };
-$("#scanBtn").onclick = async () => { try { await api("/api/scan", { method: "POST" }); wasRunning = true; } catch (e) { alert(e.message); } };
 
 refresh();
 pollStatus();

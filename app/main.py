@@ -6,12 +6,12 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, archives, config, db, library
+from . import __version__, archives, config, db, library, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = FastAPI(title="Resin Model Manager", version=__version__)
@@ -23,9 +23,8 @@ def startup():
     db.init()
     for d in (config.LIBRARY_DIR, config.CACHE_DIR):
         d.mkdir(parents=True, exist_ok=True)
-    for _ in range(config.PREVIEW_WORKERS):
-        threading.Thread(target=library.preview_worker, daemon=True).start()
-    threading.Thread(target=library.scheduler, daemon=True).start()
+    for i in range(settings.MAX_WORKERS):
+        threading.Thread(target=library.preview_worker, args=(i,), daemon=True).start()
     library._preview_wakeup.set()
 
 
@@ -48,11 +47,26 @@ def status():
         "previews": counts,
         "rendering": library.preview_state["current"],
         "source_dir": str(config.SOURCE_DIR),
-        "source_available": config.SOURCE_DIR.is_dir(),
+        "source_available": library.source_available(),
         "library_dir": str(config.LIBRARY_DIR),
         "version": __version__,
         "commit": config.GIT_COMMIT,
     }
+
+
+@app.get("/api/settings")
+def get_settings():
+    return settings.values()
+
+
+@app.put("/api/settings")
+def put_settings(changes: dict[str, int]):
+    try:
+        changed = settings.update(changes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    library.apply_settings_change(changed)
+    return settings.values()
 
 
 @app.post("/api/import")
@@ -62,10 +76,19 @@ def start_import():
     return {"ok": True}
 
 
-@app.post("/api/scan")
-def start_scan():
-    if not library.run_job("scan", library.scan):
-        raise HTTPException(409, "Another job is running")
+@app.put("/api/upload")
+async def upload(request: Request, path: str, size: int = -1):
+    """Save one file (raw request body) at `path` inside the library."""
+    try:
+        return await library.save_upload(path, size, request.stream())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/index")
+def start_index():
+    """Index the library after uploads (queued if another job is running)."""
+    library.request_reindex()
     return {"ok": True}
 
 
