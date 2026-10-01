@@ -52,7 +52,9 @@ groups them by **release** and **model**, separates **supported** and
   browse only their releases; the search box matches creators too. With the
   *Creator / Release* folder setting, the creator folder is used until you set
   one. Creators are kept when the library is re-indexed; save a blank creator
-  to go back to the folder guess.
+  to go back to the folder guess. *No creator* at the top of the Creators list
+  shows the releases still missing one: setting a creator there moves straight
+  on to the next, and *Set creator for several* lists only those releases.
 * **Previews.** STLs are rendered by a built-in CPU renderer (numpy, no GPU or
   OpenGL needed) and cached as WebP images in `data/previews`. Files inside
   archives are rendered straight from the archive without extracting them into

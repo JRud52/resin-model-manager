@@ -51,9 +51,10 @@ async function loadCreators() {
   $("#creatorOptions").innerHTML = named.map((c) => `<option value="${esc(c.creator)}">`).join("");
   const li = (value, label, n, cls = "") => `<li data-c="${esc(value)}" class="${cls} ${state.creator === value ? "active" : ""}" title="${esc(label)}">
       <span class="name">${esc(label)}</span><span class="muted">${n}</span></li>`;
-  $("#creators").innerHTML = (named.length ? `<li data-all class="${state.creator === null ? "active" : ""}"><span class="name">All creators</span></li>` : "") +
+  // "No creator" sits at the top so releases still missing one are easy to work through.
+  $("#creators").innerHTML = (list.length ? `<li data-all class="${state.creator === null ? "active" : ""}"><span class="name">All creators</span></li>` : "") +
+    (none ? li("", "No creator", none.releases, "muted") : "") +
     named.map((c) => li(c.creator, c.creator, c.releases)).join("") +
-    (none && named.length ? li("", "No creator", none.releases, "muted") : "") +
     (named.length ? "" : `<li class="muted small" style="cursor:default">Set a creator from a release, or when importing.</li>`);
 }
 
@@ -103,9 +104,10 @@ async function loadModels(append = false) {
   grid.innerHTML = state.items.map(card).join("");
   $("#more").classList.toggle("hidden", state.items.length >= state.total);
   const rel = state.releases.find((r) => r.release === state.release);
-  const who = state.release !== null ? rel?.creator : state.creator === "" ? "No creator" : state.creator;
+  const who = (state.release !== null ? rel?.creator : state.creator) || (state.creator === "" ? "No creator" : "");
   $("#crumbs").textContent = [who, state.release ?? "All releases"].filter(Boolean).join(" / ") + ` · ${state.total} models`;
-  $("#releaseCreatorBtn").classList.toggle("hidden", state.release === null);
+  $("#releaseCreatorBtn").classList.toggle("hidden", state.release === null && state.creator !== "");
+  $("#releaseCreatorBtn").textContent = state.release === null ? "Set creator for several" : "Set creator";
   $("#activeTags").innerHTML = state.tags.map((t) => `<span class="badge tag on" data-tag="${esc(t)}" title="Remove filter">${esc(t)} ✕</span>`).join("");
   $("#releaseTagBtn").classList.toggle("hidden", state.release === null);
   $("#modelList").innerHTML = [...new Set(state.items.map((m) => m.model))].map((m) => `<option value="${esc(m)}">`).join("");
@@ -223,9 +225,9 @@ $("#releaseTagDlg").addEventListener("close", async () => {
 
 // ------------------------------------------------------------ creators
 
-async function openCreators(releases, preset = "") {
+async function openCreators(releases, preset = "", onlyWithout = false) {
   const dlg = $("#creatorDlg"), form = $("form", dlg);
-  const all = await api("/api/releases");
+  const all = await api(onlyWithout ? "/api/releases?creator=" : "/api/releases");
   form.reset();
   form.creator.value = preset;
   const checked = new Set(releases);
@@ -259,15 +261,24 @@ $("#creatorDlg").addEventListener("close", async () => {
   const releases = creatorBoxes().filter((b) => b.checked).map((b) => b.value);
   if (!releases.length) return;
   const r = await api("/api/releases/creator", { method: "POST", body: JSON.stringify({ releases, creator: $("form", dlg).creator.value }) });
-  if (state.creator !== null) state.creator = r.creator || null;  // follow the edited releases
+  if (state.creator === "") {
+    // Working through "No creator": stay in it and move on to the next release still without one.
+    if (state.release !== null && r.creator) {
+      const order = state.releases.map((x) => x.release);
+      const i = order.indexOf(state.release);
+      state.release = [...order.slice(i + 1), ...order.slice(0, i)].find((x) => !releases.includes(x)) ?? null;
+    }
+  } else if (state.creator !== null) state.creator = r.creator || null;  // follow the edited releases
   refresh();
 });
 $("#releaseCreatorBtn").onclick = () => {
+  if (state.release === null) { openCreators([], "", true); return; }  // "No creator" view
   const rel = state.releases.find((r) => r.release === state.release);
   openCreators([state.release], rel?.creator || "");
 };
-$("#editCreatorsBtn").onclick = () =>
-  openCreators(state.creator !== null ? state.releases.map((r) => r.release) : [], state.creator || "");
+$("#editCreatorsBtn").onclick = () => state.creator === ""
+  ? openCreators([], "", true)
+  : openCreators(state.creator !== null ? state.releases.map((r) => r.release) : [], state.creator || "");
 
 let searchTimer;
 $("#search").addEventListener("input", (e) => {
