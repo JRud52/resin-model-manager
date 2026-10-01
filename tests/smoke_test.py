@@ -144,8 +144,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import meshes as M
 
 
-def put(path, data):
-    q = urllib.parse.urlencode({"path": path, "size": len(data)})
+def put(path, data, depth=0):
+    q = urllib.parse.urlencode({"path": path, "size": len(data), "depth": depth})
     req = urllib.request.Request(f"{BASE}/api/upload?{q}", data=data, method="PUT")
     return json.load(urllib.request.urlopen(req))
 
@@ -183,6 +183,32 @@ assert models[("Uploaded Release", "Gnome")]["cover_image"], "uploaded picture u
 tank = models[("Tank Pack", "Hover Tank")]
 assert tank["supported_files"] == 1 and tank["unsupported_files"] == 1, tank
 print("uploads ok")
+
+# Layouts per folder: the copied NAS library follows the setting, browser uploads stay Release / Model,
+# and an upload with a creator is filed as Creator / Release / Model.
+mbuf = io.BytesIO()
+with zipfile.ZipFile(mbuf, "w") as z:
+    z.writestr("Walker/Walker.stl", stl)
+    z.writestr("Strider/Strider_sup.stl", stl)
+assert put("Tank Works/Mech Pack.zip", mbuf.getvalue(), depth=1)["path"] == "Tank Works/Mech Pack.zip"
+req = urllib.request.Request(f"{BASE}/api/settings", data=json.dumps({"release_depth": 1}).encode(),
+                             headers={"Content-Type": "application/json"}, method="PUT")
+urllib.request.urlopen(req)
+time.sleep(0.5)
+wait_job()
+models = {(m["release"], m["model"]): m for m in get("/api/models")["items"]}
+assert models[("Mech Pack", "Walker")]["creator"] == "Tank Works", sorted(models)
+assert ("Mech Pack", "Strider") in models
+assert ("Uploaded Release", "Gnome") in models and ("Tank Pack", "Hover Tank") in models, "uploads regrouped"
+assert models[("Supported", "Red Dragon")]["creator"] == "Dragon Lords", "copied library follows the setting"
+req = urllib.request.Request(f"{BASE}/api/settings", data=json.dumps({"release_depth": 0}).encode(),
+                             headers={"Content-Type": "application/json"}, method="PUT")
+urllib.request.urlopen(req)
+time.sleep(0.5)
+wait_job()
+models = {(m["release"], m["model"]): m for m in get("/api/models")["items"]}
+assert models[("Mech Pack", "Walker")]["creator"] == "Tank Works" and ("Dragon Lords", "Red Dragon") in models
+print("layouts ok")
 
 for _ in range(120):
     pv = get("/api/status")["previews"]

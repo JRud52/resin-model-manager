@@ -152,6 +152,7 @@
     <label>Creator (optional)
       <input id="uploadCreator" list="creatorOptions" placeholder="e.g. who made these models" autocomplete="off">
     </label>
+    <p class="muted small">Uploads are read as Release / Model. With a creator they are filed in that creator's folder, next to their other releases.</p>
     <div id="uploadQueue" class="muted small"></div>
     <progress id="uploadProgress" class="hidden" max="1" value="0"></progress>
     <div class="row">
@@ -168,7 +169,7 @@
 <dialog id="settingsDlg">
   <form id="settingsForm" method="dialog" class="card-form">
     <h3>Settings</h3>
-    <label>Folders above each release
+    <label>Layout of the copied NAS folder
       <select name="release_depth">
         <option value="0">0: Release / Model / files</option>
         <option value="1">1: Creator / Release / Model / files</option>
@@ -179,7 +180,7 @@
     <label>Background render threads <input name="preview_workers" type="number" min="1" max="8" required></label>
     <label>Preview size (pixels) <input name="preview_size" type="number" min="128" max="2048" step="64" required></label>
     <label>Skip previews for files larger than (MB) <input name="max_preview_mb" type="number" min="1" required></label>
-    <p class="muted small">Changing the folder setting regroups the library. Changing the preview size re-renders every preview.</p>
+    <p class="muted small">Files imported in the browser always group as Release / Model (Creator / Release / Model when you give a creator), whatever this says. Changing the folder setting regroups the copied library. Changing the preview size re-renders every preview.</p>
     <p class="muted small" id="settingsErr"></p>
     <div class="row">
       <button value="save" class="primary">Save</button>

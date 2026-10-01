@@ -19,9 +19,12 @@ groups them by **release** and **model**, separates **supported** and
   existing library on the NAS is set as `SOURCE_PATH` (mounted read-only), the Import
   dialog can also copy it in; the originals are never changed.
 * **Grouping.** Each file's path is read with archives treated as folders
-  (`Release/Heroes.zip` → `Release/Heroes/...`). The top folder is the release
-  (or set *Folders above each release* to 1 in Settings if you keep
-  `Creator/Release/...`). The first
+  (`Release/Heroes.zip` → `Release/Heroes/...`). Files imported in the browser
+  are read as `Release/Model/...`, or filed as `Creator/Release/Model/...` when
+  you give a creator in the Import dialog. A library copied from a NAS folder
+  follows *Layout of the copied NAS folder* in Settings (set it to
+  `Creator / Release / Model` if that is how you keep it). Each top-level
+  folder remembers how it arrived, so both kinds group correctly side by side. The first
   meaningful folder below it is the model; folders like `Supported`, `STL`,
   `32mm`, `Lychee` or `<Model> Presupported` are skipped as noise. Deeper
   folders such as `Heads` or `Weapon options` become option groups. Loose files
@@ -44,7 +47,8 @@ groups them by **release** and **model**, separates **supported** and
 * **Creators.** With a release selected, *Set creator* names who made it. *Edit*
   next to Creators in the sidebar sets the creator of many releases at once
   (filter the list, tick releases, save). The Import dialog has an optional
-  Creator field for everything you upload. Click a creator in the sidebar to
+  Creator field: uploads with a creator go into that creator's folder in the
+  library, next to their other releases. Click a creator in the sidebar to
   browse only their releases; the search box matches creators too. With the
   *Creator / Release* folder setting, the creator folder is used until you set
   one. Creators are kept when the library is re-indexed; save a blank creator
@@ -131,8 +135,9 @@ folder*.
 
 ### Settings
 
-The ⚙ button in the header holds the rest: how many folders sit above each
-release (`Creator/Release/...`), background rendering,
+The ⚙ button in the header holds the rest: the layout of a library copied
+from the NAS folder (`Release/...` or `Creator/Release/...`; browser imports
+don't use it), background rendering,
 render threads, preview size and the preview size limit. They are saved in the
 database, so they survive updates. Changing the folder setting regroups the
 library; changing the preview size re-renders the previews.

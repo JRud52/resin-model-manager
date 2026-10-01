@@ -77,6 +77,14 @@ CREATE TABLE IF NOT EXISTS release_creators (
     creator TEXT NOT NULL
 );
 
+-- Layout of each top-level library folder, recorded when it arrives: how many
+-- folder levels sit above the release (0 Release/Model, 1 Creator/Release/Model).
+-- Folders without a row (e.g. a copied NAS library) use the release_depth setting.
+CREATE TABLE IF NOT EXISTS folder_layouts (
+    folder TEXT PRIMARY KEY,         -- first part of the logical path
+    depth INTEGER NOT NULL
+);
+
 -- Values saved from the Settings dialog (see settings.py).
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,

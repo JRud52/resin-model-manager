@@ -25,6 +25,8 @@ def startup():
         d.mkdir(parents=True, exist_ok=True)
     for i in range(settings.MAX_WORKERS):
         threading.Thread(target=library.preview_worker, args=(i,), daemon=True).start()
+    if library.migrate_layouts():
+        library.request_reindex()
     library._preview_wakeup.set()
 
 
@@ -79,10 +81,11 @@ def start_import():
 
 
 @app.put("/api/upload")
-async def upload(request: Request, path: str, size: int = -1):
-    """Save one file (raw request body) at `path` inside the library."""
+async def upload(request: Request, path: str, size: int = -1, depth: int = Query(0, ge=0, le=1)):
+    """Save one file (raw request body) at `path` inside the library.
+    depth=1 when `path` starts with a creator folder (Creator/Release/...)."""
     try:
-        return await library.save_upload(path, size, request.stream())
+        return await library.save_upload(path, size, request.stream(), depth)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
