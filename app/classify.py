@@ -90,10 +90,44 @@ class Guess:
     model_root: str  # logical path prefix identifying this model (used for overrides)
 
 
-def guess(logical_path: str, release_depth: int = 0, sibling_stems: list[str] | None = None) -> Guess:
+def name_key(name: str) -> str:
+    """Comparison key for folder and creator names ('Bite_The_Bullet' == 'Bite The Bullet')."""
+    return strip_tokens(name) or norm(name)
+
+
+def parse_keys(text: str) -> set[str]:
+    """Comma-separated folder names (the Ignored folders setting) -> name keys."""
+    return {name_key(n) for n in text.split(",") if n.strip()} - {""}
+
+
+def layout(folders: list[str], release_depth: int, ignored_keys: set[str] | None = None,
+           creator_keys: set[str] | None = None) -> tuple[int, int]:
+    """(leading folders to ignore, folders above the release after them).
+
+    Leading folders such as ``Freebies`` are not creators. Below them, a folder named
+    after a known creator is the creator (Freebies/Creator/Release/...); anything else
+    is the release (Freebies/Release/...)."""
+    skip = 0
+    while skip < len(folders) and name_key(folders[skip]) in (ignored_keys or ()):
+        skip += 1
+    if skip == len(folders) and skip:
+        skip -= 1  # files loose in Freebies/: the folder itself is their release
+    if not skip:
+        return 0, release_depth
+    rest = folders[skip:]
+    return skip, 1 if len(rest) > 1 and name_key(rest[0]) in (creator_keys or ()) else 0
+
+
+def guess(logical_path: str, release_depth: int = 0, sibling_stems: list[str] | None = None,
+          creator_keys: set[str] | None = None, ignored_keys: set[str] | None = None) -> Guess:
+    """creator_keys: name_key() of known creators. A folder below the release that just
+    repeats a creator name (Creator/Release/Creator/Model) is skipped like a noise folder.
+    ignored_keys: leading folders that are neither creator nor release (see layout())."""
     p = PurePosixPath(logical_path)
     folders = list(p.parts[:-1])
     stem = p.stem
+    skipped, release_depth = layout(folders, release_depth, ignored_keys, creator_keys)
+    head, folders = folders[:skipped], folders[skipped:]
     creator = " / ".join(folders[:release_depth])
     if len(folders) > release_depth:
         release_raw = folders[release_depth]
@@ -111,13 +145,14 @@ def guess(logical_path: str, release_depth: int = 0, sibling_stems: list[str] | 
     if supported is None and release_raw:
         supported = support_flag(release_raw)
 
-    meaningful = [(i, f) for i, f in enumerate(rest) if not is_noise(f, release_raw)]
+    skip = {name_key(f) for f in folders[:release_depth]} | (creator_keys or set())
+    meaningful = [(i, f) for i, f in enumerate(rest) if not is_noise(f, release_raw) and name_key(f) not in skip]
     if meaningful:
         idx, mfolder = meaningful[0]
         model = pretty_clean(mfolder)
         model_key = strip_tokens(mfolder)
         options = [pretty_clean(f) for _, f in meaningful[1:] if strip_tokens(f) != model_key]
-        model_root = "/".join([*folders[:release_depth + 1], *rest[:idx + 1]])
+        model_root = "/".join([*head, *folders[:release_depth + 1], *rest[:idx + 1]])
         return Guess(creator, release, model, " / ".join(options), supported, model_root)
 
     # Loose files: derive the model from the file name.

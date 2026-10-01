@@ -612,6 +612,7 @@ $("#settingsBtn").onclick = async () => {
   f.max_preview_mb.value = s.max_preview_mb;
   f.preferred_format.value = s.preferred_format;
   f.preferred_support.value = s.preferred_support;
+  f.ignored_folders.value = s.ignored_folders;
   $("#settingsErr").textContent = "";
   $("#settingsDlg").showModal();
 };
@@ -619,7 +620,7 @@ $("#settingsForm").addEventListener("submit", async (e) => {
   if (e.submitter?.value !== "save") return;
   e.preventDefault();
   const f = e.target;
-  const body = { prerender: f.prerender.checked ? 1 : 0, preferred_format: f.preferred_format.value, preferred_support: f.preferred_support.value };
+  const body = { prerender: f.prerender.checked ? 1 : 0, preferred_format: f.preferred_format.value, preferred_support: f.preferred_support.value, ignored_folders: f.ignored_folders.value };
   for (const k of ["release_depth", "preview_workers", "preview_size", "max_preview_mb"]) body[k] = Number(f[k].value);
   try {
     prefs = await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });

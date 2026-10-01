@@ -24,6 +24,12 @@ CHOICES = {
     "preferred_support": ("supported", ("", "supported", "unsupported")),
 }
 
+# Free text settings: key -> (default, maximum length).
+TEXTS = {
+    # Comma-separated folder names that are never a creator (e.g. a Freebies folder).
+    "ignored_folders": ("Freebies", 500),
+}
+
 _lock = threading.Lock()
 _values: dict | None = None
 
@@ -42,6 +48,8 @@ def values() -> dict:
             for k, (default, allowed) in CHOICES.items():
                 v = stored.get(k, default)
                 _values[k] = v if v in allowed else default
+            for k, (default, _) in TEXTS.items():
+                _values[k] = stored.get(k, default)
         return dict(_values)
 
 
@@ -59,6 +67,10 @@ def update(changes: dict) -> dict:
             v = str(v)
             if v not in CHOICES[k][1]:
                 raise ValueError(f"{k} must be one of {', '.join(repr(a) for a in CHOICES[k][1])}")
+        elif k in TEXTS:
+            v = ", ".join(n.strip() for n in str(v).split(",") if n.strip())
+            if len(v) > TEXTS[k][1]:
+                raise ValueError(f"{k} is too long")
         elif k in FIELDS:
             _, lo, hi = FIELDS[k]
             try:
