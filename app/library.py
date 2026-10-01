@@ -377,20 +377,13 @@ def reclassify():
     release_creators = {r["release"].lower(): r["creator"]
                         for r in c.execute("SELECT release, creator FROM release_creators")}
     layouts, default_depth = folder_layouts(), settings.get("release_depth")
-    # Every creator name we know of, so a release that repeats its creator's folder
-    # inside it (Creator/Release/Creator/Model) still finds the real model folders.
-    creator_keys = {classify.name_key(n) for n in release_creators.values()}
-    creator_keys |= {classify.name_key(o["creator"]) for o in overrides if o["creator"]}
-    for r in rows:
-        parts = PurePosixPath(r["logical_path"]).parts
-        depth = depth_for(r["logical_path"], layouts, default_depth)
-        creator_keys |= {classify.name_key(f) for f in parts[:min(depth, len(parts) - 1)]}
-    creator_keys.discard("")
+    ignored = classify.parse_keys(settings.get("ignored_folders"))
+    creator_keys = _creator_keys(rows, release_creators.values(), overrides, layouts, default_depth, ignored)
     updates = []
     for r in rows:
         lp = r["logical_path"]
         g = classify.guess(lp, depth_for(lp, layouts, default_depth), by_folder[str(PurePosixPath(lp).parent)],
-                           creator_keys)
+                           creator_keys, ignored)
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
         creator, set_unknown = g.creator, False
         for o in overrides:
@@ -414,8 +407,23 @@ def reclassify():
                         g.model_root, hidden, r["id"]])
     c.executemany("UPDATE files SET creator=?, release=?, model=?, model_id=?, option=?, supported=?, "
                   "model_root=?, hidden=? WHERE id=?", updates)
-    match_images(c, overrides)
+    match_images(c, overrides, creator_keys, ignored)
     c.commit()
+
+
+def _creator_keys(rows, set_creators, overrides, layouts, default_depth, ignored) -> set[str]:
+    """Every creator name we know of, so a release that repeats its creator's folder
+    inside it (Creator/Release/Creator/Model) still finds the real model folders, and
+    Freebies/Creator/Release is told apart from Freebies/Release."""
+    keys = {classify.name_key(n) for n in set_creators}
+    keys |= {classify.name_key(o["creator"]) for o in overrides if o["creator"]}
+    for r in rows:
+        parts = PurePosixPath(r["logical_path"]).parts
+        if parts and classify.name_key(parts[0]) in ignored:
+            continue
+        depth = depth_for(r["logical_path"], layouts, default_depth)
+        keys |= {classify.name_key(f) for f in parts[:min(depth, len(parts) - 1)]}
+    return keys - ignored - {""}
 
 
 # ---------------------------------------------------------------- bundled preview pictures
@@ -466,7 +474,7 @@ def _name_match(words: list[str], candidates: dict) -> tuple | None:
     return hits.pop() if len(hits) == 1 else None
 
 
-def match_images(c, overrides):
+def match_images(c, overrides, creator_keys: set[str] | None = None, ignored: set[str] | None = None):
     """Attach each picture to a model, or else to its release.
 
     * A picture inside a model's folder (at any depth) belongs to that model.
@@ -507,7 +515,9 @@ def match_images(c, overrides):
         lp = PurePosixPath(r["logical_path"])
         folders = list(lp.parent.parts)
         depth = depth_for(r["logical_path"], layouts, default_depth)
-        release = classify.guess(r["logical_path"], depth).release
+        release = classify.guess(r["logical_path"], depth, None, creator_keys, ignored).release
+        skipped, d = classify.layout(folders, depth, ignored, creator_keys)
+        depth = skipped + d  # index of the release folder
         release_raw = folders[depth] if len(folders) > depth else ""
         hidden, forced = 0, None
         for o in overrides:
@@ -758,6 +768,6 @@ def apply_settings_change(changed: dict):
             c.execute(f"UPDATE {table} SET preview='pending', preview_error=NULL "
                       "WHERE preview='error' AND preview_error LIKE 'larger than%'")
     c.commit()
-    if "release_depth" in changed:
+    if "release_depth" in changed or "ignored_folders" in changed:
         request_reindex()
     _preview_wakeup.set()

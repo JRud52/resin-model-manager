@@ -142,10 +142,14 @@ assert {r["release"]: r["creator"] for r in get("/api/releases?creator=Mini%20Fo
     {"Dragon Lords": "Mini Forge", "Goblin Warband": "Mini Forge", "Bits Pack": "Mini Forge"}
 post("/api/releases/creator", {"releases": ["Bits Pack"], "creator": ""})
 assert {c["creator"]: c["releases"] for c in get("/api/creators")}["Mini Forge"] == 2
+assert names("/api/models?release=Holiday%20Elf") == ["Elf"], "Freebies folder is skipped"
+assert names("/api/models?release=Bite%20The%20Bullet") == ["Free Goblin"]  # creator not known yet
 ef = "/api/models?release=Explorers%20Fellowship"
 assert names(ef) == ["Bite The Bullet"], names(ef)  # creator not known yet: looks like a model folder
 post("/api/releases/creator", {"releases": ["Explorers Fellowship"], "creator": "Bite the Bullet"})
 assert names(ef) == ["Dwarf Ranger", "Elf Scout"], "folder repeating the creator is skipped"
+fg = {(m["release"], m["model"]): m["creator"] for m in get("/api/models?q=goblin")["items"]}
+assert fg.get(("Free Goblin", "Goblin")) == "Bite The Bullet", fg  # Freebies/Creator/Release once the creator is known
 post("/api/releases/creator", {"releases": ["Explorers Fellowship"], "creator": ""})
 print("creators ok")
 

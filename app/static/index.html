@@ -181,6 +181,10 @@
         <option value="2">2: Group / Creator / Release / Model / files</option>
       </select>
     </label>
+    <label>Folders that are not creators
+      <input name="ignored_folders" placeholder="e.g. Freebies, Misc" autocomplete="off">
+    </label>
+    <p class="muted small">Comma separated. A top-level folder with one of these names is skipped when reading creators: inside it, a folder named after a known creator is the creator, anything else is a release.</p>
     <label>Preferred file format
       <select name="preferred_format">
         <option value="stl">STL</option>
