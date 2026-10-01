@@ -37,8 +37,10 @@ def _sup(v):
 @app.get("/api/status")
 def status():
     c = db.conn()
-    counts = {r["preview"]: r["n"] for r in c.execute(
-        "SELECT preview, COUNT(*) n FROM files WHERE hidden=0 GROUP BY preview")}
+    counts: dict[str, int] = {}
+    for table in ("files", "images"):
+        for r in c.execute(f"SELECT preview, COUNT(*) n FROM {table} WHERE hidden=0 GROUP BY preview"):
+            counts[r["preview"]] = counts.get(r["preview"], 0) + r["n"]
     return {
         "job": library.job.as_dict(),
         "files": c.execute("SELECT COUNT(*) FROM files WHERE hidden=0").fetchone()[0],
@@ -94,7 +96,8 @@ def start_index():
 
 @app.post("/api/previews/retry")
 def retry_previews():
-    db.conn().execute("UPDATE files SET preview='pending', preview_error=NULL WHERE preview='error'")
+    for table in ("files", "images"):
+        db.conn().execute(f"UPDATE {table} SET preview='pending', preview_error=NULL WHERE preview='error'")
     db.conn().commit()
     library._preview_wakeup.set()
     return {"ok": True}
@@ -110,6 +113,12 @@ def releases(q: str = "", tags: str = ""):
                          SUM(size) size FROM files WHERE {where} GROUP BY release ORDER BY release COLLATE NOCASE""",
                      args).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.get("/api/releases/images")
+def release_images(release: str):
+    """Preview pictures that came with a release (not tied to one model)."""
+    return library.release_images(release)
 
 
 def _filters(release: Optional[str], q: str, tags: list[str]):
@@ -175,12 +184,14 @@ def models(release: Optional[str] = None, q: str = "", supported: Optional[str] 
                 ORDER BY MIN(release) COLLATE NOCASE, MIN(model) COLLATE NOCASE LIMIT ? OFFSET ?""",
                      args + [limit, offset]).fetchall()
     covers = library.cover_file_ids([r["model_id"] for r in rows])
+    images = library.cover_image_ids([r["model_id"] for r in rows])
     tag_map = _tags_for([r["model_id"] for r in rows])
     out = []
     for r in rows:
         d = dict(r)
         d["id"] = d.pop("model_id")
         d["cover"] = covers.get(d["id"])
+        d["cover_image"] = images.get(d["id"])
         d["tags"] = tag_map.get(d["id"], [])
         d["exts"] = sorted((d["exts"] or "").split(","))
         out.append(d)
@@ -207,6 +218,7 @@ def model_detail(model_id: str, include_hidden: bool = False):
     return {
         "id": model_id, "model": rows[0]["model"], "release": rows[0]["release"], "creator": rows[0]["creator"],
         "cover": covers.get(model_id),
+        "images": library.model_images(model_id),
         "tags": _tags_for([model_id])[model_id],
         "roots": sorted({r["model_root"] for r in rows}),
         "files": [_file_dict(r) for r in rows],
@@ -221,17 +233,36 @@ def file_preview(file_id: int):
     return FileResponse(p, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
 
 
+@app.get("/api/images/{image_id}/preview")
+def image_preview(image_id: int):
+    p = library.preview_for(image_id, "images")
+    if not p:
+        raise HTTPException(404, "No preview")
+    return FileResponse(p, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/images/{image_id}/full")
+def image_full(image_id: int):
+    """The bundled picture as it is, straight out of its archive if need be."""
+    r = db.conn().execute("SELECT * FROM images WHERE id=?", (image_id,)).fetchone()
+    return _send(r, inline=True)
+
+
 @app.get("/api/files/{file_id}/download")
 def file_download(file_id: int):
-    r = db.conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    return _send(db.conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone())
+
+
+def _send(r, inline: bool = False):
     if not r:
         raise HTTPException(404)
     path = (config.LIBRARY_DIR / r["rel_path"]).resolve()
     if not path.is_relative_to(config.LIBRARY_DIR.resolve()) or not path.exists():
         raise HTTPException(404)
     mime = "model/stl" if r["ext"] == ".stl" else (mimetypes.guess_type(r["name"])[0] or "application/octet-stream")
+    disposition = "inline" if inline else "attachment"
     if not r["member"]:
-        return FileResponse(path, media_type=mime, filename=r["name"])
+        return FileResponse(path, media_type=mime, filename=r["name"], content_disposition_type=disposition)
     stream = archives.open_member_stream(path, r["member"])
 
     def gen():
@@ -240,7 +271,7 @@ def file_download(file_id: int):
                 yield chunk
 
     return StreamingResponse(gen(), media_type=mime, headers={
-        "Content-Disposition": f'attachment; filename="{r["name"]}"', "Content-Length": str(r["size"])})
+        "Content-Disposition": f'{disposition}; filename="{r["name"]}"', "Content-Length": str(r["size"])})
 
 
 # ---------------------------------------------------------------- tags

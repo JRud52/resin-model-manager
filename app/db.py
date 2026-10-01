@@ -30,11 +30,36 @@ CREATE INDEX IF NOT EXISTS files_model ON files(model_id);
 CREATE INDEX IF NOT EXISTS files_release ON files(release);
 CREATE INDEX IF NOT EXISTS files_preview ON files(preview);
 
+-- Preview pictures that came with the files (loose or inside archives).
+-- Matched to a model (model_id set) or only to a release on every reclassify.
+CREATE TABLE IF NOT EXISTS images (
+    id INTEGER PRIMARY KEY,
+    rel_path TEXT NOT NULL,
+    member TEXT NOT NULL DEFAULT '',
+    logical_path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    ext TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime REAL NOT NULL,
+    release TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',  -- '' for release-level pictures
+    scope TEXT NOT NULL DEFAULT 'release', -- model | release
+    rank INTEGER NOT NULL DEFAULT 0,    -- lower is a better cover
+    hidden INTEGER NOT NULL DEFAULT 0,
+    preview TEXT NOT NULL DEFAULT 'pending',
+    preview_error TEXT,
+    seen INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(rel_path, member)
+);
+CREATE INDEX IF NOT EXISTS images_model ON images(model_id);
+CREATE INDEX IF NOT EXISTS images_release ON images(release);
+
 CREATE TABLE IF NOT EXISTS archives (
     rel_path TEXT PRIMARY KEY,
     size INTEGER NOT NULL,
     mtime REAL NOT NULL,
-    error TEXT
+    error TEXT,
+    listed INTEGER NOT NULL DEFAULT 1  -- library.ARCHIVE_LISTING when the members were last read
 );
 
 -- Tags belong to a model (release + model name), not to files, so they survive rescans.
@@ -81,5 +106,8 @@ def conn() -> sqlite3.Connection:
 
 
 def init():
-    conn().executescript(SCHEMA)
-    conn().commit()
+    c = conn()
+    c.executescript(SCHEMA)
+    if "listed" not in {r["name"] for r in c.execute("PRAGMA table_info(archives)")}:
+        c.execute("ALTER TABLE archives ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
+    c.commit()

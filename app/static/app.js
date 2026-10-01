@@ -34,9 +34,11 @@ $("#releases").addEventListener("click", (e) => {
   refresh();
 });
 
-function thumb(fileId, label) {
-  if (!fileId) return `<div class="ph">No preview</div>`;
-  return `<img loading="lazy" src="/api/files/${fileId}/preview" alt="${esc(label)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">`;
+function thumb(m) {
+  // Pictures that came with the model win over rendered STL previews.
+  const src = m.cover_image ? `/api/images/${m.cover_image}/preview` : m.cover ? `/api/files/${m.cover}/preview` : null;
+  if (!src) return `<div class="ph">No preview</div>`;
+  return `<img loading="lazy" src="${src}" alt="${esc(m.model)}" class="${m.cover_image ? "photo" : ""}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">`;
 }
 
 function card(m) {
@@ -47,7 +49,7 @@ function card(m) {
   (m.tags || []).forEach((t) => b.push(`<span class="badge tag">${esc(t)}</span>`));
   m.exts.filter((x) => x && x !== ".stl").forEach((x) => b.push(`<span class="badge">${esc(x.slice(1).toUpperCase())}</span>`));
   return `<div class="card" data-id="${m.id}">
-    <div class="thumb">${thumb(m.cover, m.model)}</div>
+    <div class="thumb">${thumb(m)}</div>
     <div class="meta">
       <div class="title" title="${esc(m.model)}">${esc(m.model)}</div>
       <div class="sub" title="${esc(m.release)}">${state.release === null ? esc(m.release) + " · " : ""}${m.files} files · ${fmtSize(m.size)}</div>
@@ -61,6 +63,7 @@ async function loadModels(append = false) {
   if (state.release !== null) p.set("release", state.release);
   if (state.sup) p.set("supported", state.sup);
   if (state.tags.length) p.set("tags", state.tags.join(","));
+  if (!append) loadReleaseImages();
   const res = await api(`/api/models?${p}`);
   state.total = res.total;
   state.items = append ? state.items.concat(res.items) : res.items;
@@ -79,6 +82,23 @@ async function loadModels(append = false) {
     empty.classList.remove("hidden");
   } else empty.classList.add("hidden");
 }
+
+async function loadReleaseImages() {
+  const el = $("#releaseImages");
+  const release = state.release;
+  const imgs = release === null ? [] : await api(`/api/releases/images?release=${encodeURIComponent(release)}`);
+  if (release !== state.release) return;
+  el.innerHTML = `<div class="side-title">Release pictures</div><div class="strip">` + imgs.map((i) => `<button class="rimg" data-full="/api/images/${i.id}/full" data-name="${esc(i.name)}" title="${esc(i.path)}">
+    <img loading="lazy" src="/api/images/${i.id}/preview" alt="${esc(i.name)}" onerror="this.parentElement.remove()"></button>`).join("") + `</div>`;
+  el.classList.toggle("hidden", !imgs.length);
+}
+$("#releaseImages").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-full]"); if (!b) return;
+  $("#lightboxImg").src = b.dataset.full;
+  $("#lightboxName").textContent = b.dataset.name;
+  $("#lightbox").showModal();
+});
+$("#lightbox").addEventListener("click", () => $("#lightbox").close());
 
 $("#more").onclick = () => { state.offset += PAGE; loadModels(true); };
 $("#grid").addEventListener("click", (e) => { const c = e.target.closest(".card"); if (c) openModel(c.dataset.id); });
@@ -175,7 +195,14 @@ async function openModel(id) {
     const [oa, sa] = a.split("\u0000"), [ob, sb] = b.split("\u0000");
     return oa.localeCompare(ob) || rank[sa] - rank[sb];
   });
-  $("#mFiles").innerHTML = keys.map((k) => {
+  const pics = m.images.length ? `<div class="group-title">Pictures</div>` + m.images.map((i) => `
+      <div class="file" data-img="${i.id}">
+        <img loading="lazy" class="photo" src="/api/images/${i.id}/preview" onerror="this.outerHTML='<div class=noimg>IMG</div>'">
+        <div class="fname"><div title="${esc(i.path)}">${esc(i.name)}</div>
+          <div class="muted small">${i.scope === "release" ? "Release picture" : "Model picture"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
+        <a href="/api/images/${i.id}/full" target="_blank" rel="noopener" title="Open full size">↗</a>
+      </div>`).join("") : "";
+  $("#mFiles").innerHTML = pics + keys.map((k) => {
     const [opt, sup] = k.split("\u0000");
     const title = opt ? `${esc(opt)} · ${sup}` : sup;
     return `<div class="group-title">${title}</div>` + groups.get(k).map((f) => `
@@ -187,7 +214,8 @@ async function openModel(id) {
         <button data-edit="${f.id}" title="Correct this file">✎</button>
       </div>`).join("");
   }).join("");
-  showFile(m.files.find((f) => f.id === m.cover) || m.files[0]);
+  if (m.images.length) showImage(m.images[0]);
+  else showFile(m.files.find((f) => f.id === m.cover) || m.files[0]);
   const dlg = $("#modelDlg");
   if (!dlg.open) dlg.showModal();
 }
@@ -206,10 +234,25 @@ function showFile(f) {
   document.querySelectorAll(".file").forEach((el) => el.classList.toggle("active", +el.dataset.id === f.id));
 }
 
+function showImage(i) {
+  stop3d();
+  $(".viewer").classList.remove("three");
+  state.current = null;
+  const img = $("#mPreview");
+  img.style.visibility = "visible";
+  img.src = `/api/images/${i.id}/full`;
+  img.onerror = () => { img.style.visibility = "hidden"; };
+  $("#mPreviewName").textContent = i.name;
+  $("#view3dBtn").disabled = true;
+  document.querySelectorAll(".file").forEach((el) => el.classList.toggle("active", +el.dataset.img === i.id));
+}
+
 $("#mFiles").addEventListener("click", (e) => {
   if (e.target.closest("a")) return;
   const edit = e.target.closest("[data-edit]");
   if (edit) { openFileEdit(state.model.files.find((f) => f.id === +edit.dataset.edit)); return; }
+  const pic = e.target.closest("[data-img]");
+  if (pic) { showImage(state.model.images.find((i) => i.id === +pic.dataset.img)); return; }
   const row = e.target.closest(".file");
   if (row) showFile(state.model.files.find((f) => f.id === +row.dataset.id));
 });
@@ -411,7 +454,8 @@ async function pollStatus() {
 
 // ------------------------------------------------------------ import (upload)
 
-const UPLOAD_EXTS = [".stl", ".lys", ".ctx", ".ctb", ".chitubox", ".obj", ".3mf", ".zip", ".7z"];
+const UPLOAD_EXTS = [".stl", ".lys", ".ctx", ".ctb", ".chitubox", ".obj", ".3mf", ".zip", ".7z",
+  ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"];
 const upload = { queue: [], skipped: 0, busy: false };
 const extOf = (n) => (n.match(/\.[^.]+$/)?.[0] || "").toLowerCase();
 
@@ -427,8 +471,8 @@ function renderQueue(msg) {
   const q = upload.queue;
   const total = q.reduce((n, it) => n + it.file.size, 0);
   $("#uploadQueue").textContent = msg ?? (q.length
-    ? `${q.length} file${q.length > 1 ? "s" : ""} ready (${fmtSize(total)})${upload.skipped ? `, ${upload.skipped} ignored (not model files or archives)` : ""}.`
-    : upload.skipped ? `${upload.skipped} ignored (not model files or archives).` : "");
+    ? `${q.length} file${q.length > 1 ? "s" : ""} ready (${fmtSize(total)})${upload.skipped ? `, ${upload.skipped} ignored (not model files, pictures or archives)` : ""}.`
+    : upload.skipped ? `${upload.skipped} ignored (not model files, pictures or archives).` : "");
   $("#uploadBtn").disabled = upload.busy || !q.length;
   $("#clearQueue").disabled = upload.busy || !q.length;
 }

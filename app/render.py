@@ -11,7 +11,7 @@ import re
 import struct
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 MAX_TRIANGLES = 3_000_000  # above this, triangles are subsampled for the preview
 
@@ -194,4 +194,15 @@ def embedded_thumbnail(data: bytes, size: int = 512) -> bytes | None:
     img.thumbnail((size, size))
     buf = io.BytesIO()
     img.convert("RGBA").save(buf, "WEBP", quality=85)
+    return buf.getvalue()
+
+
+def image_thumbnail(data: bytes, size: int = 512) -> bytes:
+    """Shrink a bundled preview picture (JPEG, PNG, WebP, ...) to a cached WebP."""
+    img = Image.open(io.BytesIO(data))
+    img.seek(0)
+    img = ImageOps.exif_transpose(img)
+    img.thumbnail((size, size))
+    buf = io.BytesIO()
+    img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB").save(buf, "WEBP", quality=85)
     return buf.getvalue()

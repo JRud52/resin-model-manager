@@ -48,6 +48,15 @@ groups them by **release** and **model**, separates **supported** and
   cleaned up. Previews render in the background after an import (model covers
   first), and on demand when you open something not rendered yet. For LYS/CTX
   files the app shows an embedded thumbnail when the file has one.
+* **Bundled preview pictures.** JPG, PNG, WebP, GIF and BMP pictures that come
+  with a release or model (loose, or inside its `.zip` / `.7z`) are indexed and
+  shown before rendered STL previews. A picture inside a model's folder belongs
+  to that model. Otherwise a picture named after a model belongs to it
+  (`Knight_front.jpg` next to `Knight.stl`, or in a `Renders` folder of the
+  release). Anything else is a release picture, shown above the models when the
+  release is selected; in a release with only one model it is also that
+  model's cover. Pictures named `cover`, `main`, `promo` or `preview` are
+  picked first.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
 
