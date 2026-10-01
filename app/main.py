@@ -27,6 +27,8 @@ def startup():
         threading.Thread(target=library.preview_worker, args=(i,), daemon=True).start()
     if library.migrate_layouts():
         library.request_reindex()
+    else:
+        library.rematch_images()
     library._preview_wakeup.set()
 
 

@@ -62,13 +62,15 @@ print("previews ok")
 # Bundled preview pictures: matched to models or releases, and shown before rendered STLs.
 def img_names(model):
     return [i["name"] for i in get(f"/api/models/{models[model]['id']}")["images"]]
-assert img_names("Red Dragon") == ["Red_Dragon_render.png"], img_names("Red Dragon")
-assert img_names("Knight") == ["Knight_front.jpg"]
+assert img_names("Red Dragon") == ["DL_RedDragon_Promo.jpg", "Red_Dragon_render.png"], "promo picture first"
+assert sorted(img_names("Knight")) == ["01.jpg", "Dragon Lords - Knight.jpg", "Knight_front.jpg"], img_names("Knight")
+assert img_names("Rat Trooper") == ["02_rat_trooper_painted.png"]
+assert "orc.jpg" in img_names("Orc Warboss")
 assert img_names("Rat Captain") == ["rat_captain_preview.jpg"]
 assert img_names("Lich King") == ["lich_king.webp"]
-assert img_names("Orc Warboss") == ["Orc_Warboss.jpg"]
+assert "Orc_Warboss.jpg" in img_names("Orc Warboss")
 assert img_names("Goblin Boss") == ["goblin_banner.png"], "single-model release uses the release picture"
-assert img_names("Rat Trooper") == [] and models["Rat Trooper"]["cover_image"] is None
+assert img_names("Skeleton") == [] and models["Skeleton"]["cover_image"] is None
 for name in ("Red Dragon", "Rat Captain", "Lich King", "Goblin Boss"):
     assert models[name]["cover_image"], name
     r = urllib.request.urlopen(f"{BASE}/api/images/{models[name]['cover_image']}/preview")
@@ -78,6 +80,17 @@ assert rel == ["Dragon Lords Cover.jpg"], rel
 assert [i["name"] for i in get("/api/releases/images?release=Necro%20Lords")] == ["Necro Lords Promo.png"]
 full = urllib.request.urlopen(f"{BASE}/api/images/{models['Lich King']['cover_image']}/full").read()
 assert full[:4] == b"RIFF", "full picture streamed from the 7z"
+# Moving a picture by hand: onto a model, then back to the whole release.
+cover = "Dragon Lords/Dragon Lords Cover.jpg"
+post("/api/overrides", {"prefixes": [cover], "release": "Dragon Lords", "model": "Knight"})
+assert "Dragon Lords Cover.jpg" in img_names("Knight")
+assert get("/api/releases/images?release=Dragon%20Lords") == []
+post("/api/overrides", {"prefixes": ["Dragon Lords/Images/Knight/01.jpg"], "release": "Dragon Lords", "model": ""})
+assert "01.jpg" not in img_names("Knight")
+for o in get("/api/overrides"):
+    if o["prefix"] in (cover, "Dragon Lords/Images/Knight/01.jpg"):
+        urllib.request.urlopen(urllib.request.Request(f"{BASE}/api/overrides/{o['id']}", method="DELETE"))
+assert [i["name"] for i in get("/api/releases/images?release=Dragon%20Lords")] == ["Dragon Lords Cover.jpg"]
 print("bundled pictures ok")
 
 # Downloads straight out of archives.
