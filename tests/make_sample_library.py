@@ -49,6 +49,9 @@ with py7zr.SevenZipFile(root / "Necro Lords.7z", "w") as z:
     z.writestr(pic("purple", "WEBP"), "Necro Lords/Lich King/lich_king.webp")
     z.writestr(pic("black", "PNG"), "Necro Lords/Necro Lords Promo.png")
 # Loose files at release level, named by part
+# Creator E: the creator's folder repeated inside the release
+w("Explorers Fellowship/Bite The Bullet/Dwarf Ranger/Dwarf_Ranger.stl", fig)
+w("Explorers Fellowship/Bite The Bullet/Elf Scout/Elf_Scout.stl", fig)
 w("Bits Pack/Orc_Warboss_Body.stl", fig)
 w("Bits Pack/Orc_Warboss_Axe.stl", tor)
 w("Bits Pack/Orc_Warboss_Head_sup.stl", M.with_supports(M.sphere(5, 40)))

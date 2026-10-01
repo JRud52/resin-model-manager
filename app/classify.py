@@ -90,7 +90,15 @@ class Guess:
     model_root: str  # logical path prefix identifying this model (used for overrides)
 
 
-def guess(logical_path: str, release_depth: int = 0, sibling_stems: list[str] | None = None) -> Guess:
+def name_key(name: str) -> str:
+    """Comparison key for folder and creator names ('Bite_The_Bullet' == 'Bite The Bullet')."""
+    return strip_tokens(name) or norm(name)
+
+
+def guess(logical_path: str, release_depth: int = 0, sibling_stems: list[str] | None = None,
+          creator_keys: set[str] | None = None) -> Guess:
+    """creator_keys: name_key() of known creators. A folder below the release that just
+    repeats a creator name (Creator/Release/Creator/Model) is skipped like a noise folder."""
     p = PurePosixPath(logical_path)
     folders = list(p.parts[:-1])
     stem = p.stem
@@ -111,7 +119,8 @@ def guess(logical_path: str, release_depth: int = 0, sibling_stems: list[str] | 
     if supported is None and release_raw:
         supported = support_flag(release_raw)
 
-    meaningful = [(i, f) for i, f in enumerate(rest) if not is_noise(f, release_raw)]
+    skip = {name_key(f) for f in folders[:release_depth]} | (creator_keys or set())
+    meaningful = [(i, f) for i, f in enumerate(rest) if not is_noise(f, release_raw) and name_key(f) not in skip]
     if meaningful:
         idx, mfolder = meaningful[0]
         model = pretty_clean(mfolder)

@@ -26,7 +26,9 @@ groups them by **release** and **model**, separates **supported** and
   `Creator / Release / Model` if that is how you keep it). Each top-level
   folder remembers how it arrived, so both kinds group correctly side by side. The first
   meaningful folder below it is the model; folders like `Supported`, `STL`,
-  `32mm`, `Lychee` or `<Model> Presupported` are skipped as noise. Deeper
+  `32mm`, `Lychee` or `<Model> Presupported` are skipped as noise. So is a folder that repeats
+  a creator's name inside a release (`Creator/Release/Creator/Model`), once
+  that creator is known from the folder layout, *Set creator* or the Import dialog. Deeper
   folders such as `Heads` or `Weapon options` become option groups. Loose files
   are grouped by their shared name prefix (`Orc_Warboss_Body.stl` +
   `Orc_Warboss_Axe.stl` → *Orc Warboss*).

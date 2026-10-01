@@ -377,10 +377,20 @@ def reclassify():
     release_creators = {r["release"].lower(): r["creator"]
                         for r in c.execute("SELECT release, creator FROM release_creators")}
     layouts, default_depth = folder_layouts(), settings.get("release_depth")
+    # Every creator name we know of, so a release that repeats its creator's folder
+    # inside it (Creator/Release/Creator/Model) still finds the real model folders.
+    creator_keys = {classify.name_key(n) for n in release_creators.values()}
+    creator_keys |= {classify.name_key(o["creator"]) for o in overrides if o["creator"]}
+    for r in rows:
+        parts = PurePosixPath(r["logical_path"]).parts
+        depth = depth_for(r["logical_path"], layouts, default_depth)
+        creator_keys |= {classify.name_key(f) for f in parts[:min(depth, len(parts) - 1)]}
+    creator_keys.discard("")
     updates = []
     for r in rows:
         lp = r["logical_path"]
-        g = classify.guess(lp, depth_for(lp, layouts, default_depth), by_folder[str(PurePosixPath(lp).parent)])
+        g = classify.guess(lp, depth_for(lp, layouts, default_depth), by_folder[str(PurePosixPath(lp).parent)],
+                           creator_keys)
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
         creator, set_unknown = g.creator, False
         for o in overrides:
