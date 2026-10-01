@@ -27,6 +27,9 @@ SCAN_INTERVAL_MINUTES = _int("SCAN_INTERVAL_MINUTES", 0)
 # Skip previews for STLs larger than this many MB (protects small NAS boxes).
 MAX_PREVIEW_MB = _int("MAX_PREVIEW_MB", 1024)
 
+# Short git commit baked in at image build (docker build --build-arg GIT_COMMIT=...).
+GIT_COMMIT = os.environ.get("GIT_COMMIT", "").strip()[:7]
+
 MODEL_EXTS = {".stl", ".lys", ".ctx", ".ctb", ".chitubox", ".obj", ".3mf"}
 ARCHIVE_EXTS = {".zip", ".7z"}
 RENDERABLE_EXTS = {".stl"}
