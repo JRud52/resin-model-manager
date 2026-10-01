@@ -81,7 +81,7 @@ def request_reindex():
 
 # ---------------------------------------------------------------- upload
 
-UPLOAD_EXTS = config.MODEL_EXTS | config.ARCHIVE_EXTS
+UPLOAD_EXTS = config.MODEL_EXTS | config.ARCHIVE_EXTS | config.IMAGE_EXTS
 
 
 def upload_target(rel: str) -> Path:
@@ -90,7 +90,7 @@ def upload_target(rel: str) -> Path:
     if not parts or any(p == ".." or p.startswith(".") for p in parts):
         raise ValueError("invalid path")
     if os.path.splitext(parts[-1])[1].lower() not in UPLOAD_EXTS:
-        raise ValueError(f"{parts[-1]}: not a model file or .zip/.7z archive")
+        raise ValueError(f"{parts[-1]}: not a model file, picture or .zip/.7z archive")
     lib = config.LIBRARY_DIR.resolve()
     target = lib.joinpath(*parts).resolve()
     if not target.is_relative_to(lib):
@@ -193,11 +193,17 @@ def import_library():
 
 # ---------------------------------------------------------------- scan
 
+# Bump when scanning starts keeping a new kind of archive member, so archives
+# indexed by an older version are read again (2: preview pictures).
+ARCHIVE_LISTING = 2
+
+
 def scan():
     lib = config.LIBRARY_DIR
     c = db.conn()
     job.message = "Scanning library"
     c.execute("UPDATE files SET seen = 0")
+    c.execute("UPDATE images SET seen = 0")
     paths = []
     for root, dirs, names in os.walk(lib):
         dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("@eaDir", "#recycle")]
@@ -205,7 +211,7 @@ def scan():
             if n.startswith(".") or n.endswith(".rmm-partial"):
                 continue
             ext = os.path.splitext(n)[1].lower()
-            if ext in config.MODEL_EXTS or ext in config.ARCHIVE_EXTS:
+            if ext in config.MODEL_EXTS or ext in config.ARCHIVE_EXTS or ext in config.IMAGE_EXTS:
                 paths.append(Path(root) / n)
     job.total = len(paths)
     known_archives = {r["rel_path"]: r for r in c.execute("SELECT * FROM archives")}
@@ -217,8 +223,10 @@ def scan():
         ext = p.suffix.lower()
         if ext in config.ARCHIVE_EXTS:
             prev = known_archives.get(rel)
-            if prev and prev["size"] == st.st_size and prev["mtime"] == st.st_mtime and not prev["error"]:
+            if (prev and prev["size"] == st.st_size and prev["mtime"] == st.st_mtime and not prev["error"]
+                    and prev["listed"] >= ARCHIVE_LISTING):
                 c.execute("UPDATE files SET seen = 1 WHERE rel_path = ?", (rel,))
+                c.execute("UPDATE images SET seen = 1 WHERE rel_path = ?", (rel,))
                 continue
             try:
                 members = archives.list_members(p)
@@ -226,24 +234,28 @@ def scan():
             except Exception as e:
                 log.warning("cannot read archive %s: %s", rel, e)
                 members, err = [], str(e)
-            c.execute("INSERT OR REPLACE INTO archives(rel_path, size, mtime, error) VALUES (?,?,?,?)",
-                      (rel, st.st_size, st.st_mtime, err))
-            c.execute("DELETE FROM files WHERE rel_path = ?", (rel,))
+            c.execute("INSERT OR REPLACE INTO archives(rel_path, size, mtime, error, listed) VALUES (?,?,?,?,?)",
+                      (rel, st.st_size, st.st_mtime, err, ARCHIVE_LISTING))
+            # Members no longer in the archive stay unseen and are removed below.
             base = str(PurePosixPath(rel).with_suffix(""))
             for m in members:
                 mp = PurePosixPath(m.name)
                 if mp.is_absolute() or ".." in mp.parts or any(x.startswith("__MACOSX") for x in mp.parts):
                     continue
                 mext = mp.suffix.lower()
-                if mext not in config.MODEL_EXTS:
-                    continue
-                _upsert(c, rel, m.name, f"{base}/{m.name}", mp.name, mext, m.size, st.st_mtime)
+                if mext in config.MODEL_EXTS:
+                    _upsert(c, "files", rel, m.name, f"{base}/{m.name}", mp.name, mext, m.size, st.st_mtime)
+                elif mext in config.IMAGE_EXTS and not mp.name.startswith("."):
+                    _upsert(c, "images", rel, m.name, f"{base}/{m.name}", mp.name, mext, m.size, st.st_mtime)
         else:
-            _upsert(c, rel, "", rel, p.name, ext, st.st_size, st.st_mtime)
+            table = "images" if ext in config.IMAGE_EXTS else "files"
+            _upsert(c, table, rel, "", rel, p.name, ext, st.st_size, st.st_mtime)
         if i % 200 == 0:
             c.commit()
     c.execute("DELETE FROM files WHERE seen = 0")
-    c.execute("DELETE FROM archives WHERE error IS NULL AND rel_path NOT IN (SELECT DISTINCT rel_path FROM files)")
+    c.execute("DELETE FROM images WHERE seen = 0")
+    c.execute("DELETE FROM archives WHERE error IS NULL AND rel_path NOT IN "
+              "(SELECT rel_path FROM files UNION SELECT rel_path FROM images)")
     c.commit()
     job.done = job.total
     reclassify()
@@ -253,16 +265,17 @@ def scan():
     _preview_wakeup.set()
 
 
-def _upsert(c, rel, member, logical, name, ext, size, mtime):
-    row = c.execute("SELECT id, size, mtime FROM files WHERE rel_path = ? AND member = ?", (rel, member)).fetchone()
+def _upsert(c, table, rel, member, logical, name, ext, size, mtime):
+    """Add or refresh a row in `files` (model files) or `images` (preview pictures)."""
+    row = c.execute(f"SELECT id, size, mtime FROM {table} WHERE rel_path = ? AND member = ?", (rel, member)).fetchone()
     if row and row["size"] == size and row["mtime"] == mtime:
-        c.execute("UPDATE files SET seen = 1 WHERE id = ?", (row["id"],))
+        c.execute(f"UPDATE {table} SET seen = 1 WHERE id = ?", (row["id"],))
         return
     if row:
-        c.execute("UPDATE files SET logical_path=?, name=?, ext=?, size=?, mtime=?, preview='pending', "
+        c.execute(f"UPDATE {table} SET logical_path=?, name=?, ext=?, size=?, mtime=?, preview='pending', "
                   "preview_error=NULL, seen=1 WHERE id=?", (logical, name, ext, size, mtime, row["id"]))
     else:
-        c.execute("INSERT INTO files(rel_path, member, logical_path, name, ext, size, mtime, seen) "
+        c.execute(f"INSERT INTO {table}(rel_path, member, logical_path, name, ext, size, mtime, seen) "
                   "VALUES (?,?,?,?,?,?,?,1)", (rel, member, logical, name, ext, size, mtime))
 
 
@@ -316,7 +329,130 @@ def reclassify():
             u[5] = 0
     c.executemany("UPDATE files SET creator=?, release=?, model=?, model_id=?, option=?, supported=?, "
                   "model_root=?, hidden=? WHERE id=?", updates)
+    match_images(c, overrides)
     c.commit()
+
+
+# ---------------------------------------------------------------- bundled preview pictures
+
+# Words that describe the picture rather than the model ("Knight_render_2.jpg").
+_IMAGE_WORDS = {
+    "preview", "previews", "render", "renders", "rendered", "image", "images", "img", "pic", "pics",
+    "picture", "pictures", "photo", "photos", "cover", "thumb", "thumbnail", "thumbnails", "promo",
+    "painted", "unpainted", "view", "front", "back", "side", "main", "hero", "showcase", "gallery",
+}
+# Pictures named like this are picked as the cover first.
+_COVER_WORDS = {"cover", "main", "hero", "promo", "preview", "thumbnail", "thumb", "showcase"}
+
+
+def _name_key(stem: str) -> str:
+    words = [w for w in classify.strip_tokens(stem).split() if w not in _IMAGE_WORDS]
+    while words and words[-1].isdigit():
+        words.pop()
+    return " ".join(words)
+
+
+def _name_match(key: str, candidates: dict) -> tuple | None:
+    """The model whose name the picture's name is, or starts with (longest wins)."""
+    if not key:
+        return None
+    best = None
+    for k, info in candidates.items():
+        if (key == k or key.startswith(k + " ")) and (best is None or len(k) > len(best[0])):
+            best = (k, info)
+    return best[1] if best else None
+
+
+def match_images(c, overrides):
+    """Attach each picture to a model, or else to its release.
+
+    * A picture inside a model's folder (at any depth) belongs to that model.
+    * Otherwise a picture named after a model belongs to it: first models whose
+      files sit loose in the same folder, then any model of the release
+      (``Release/Renders/Knight_front.jpg`` -> Knight).
+    * Anything else is a release picture. When the release has a single model,
+      release pictures also count as that model's pictures.
+    """
+    files = c.execute("SELECT logical_path, model, model_id, model_root, release, hidden FROM files").fetchall()
+    roots: dict[str, tuple] = {}
+    loose: dict[str, dict] = defaultdict(dict)
+    by_release: dict[str, dict] = defaultdict(dict)
+    release_models: dict[str, set] = defaultdict(set)
+    for f in files:
+        info = (f["model_id"], f["release"], f["hidden"])
+        lp = PurePosixPath(f["logical_path"])
+        if f["model_root"] != f["logical_path"]:
+            roots.setdefault(f["model_root"], info)
+        else:
+            for k in (classify.strip_tokens(f["model"]), _name_key(lp.stem)):
+                if k:
+                    loose[str(lp.parent)].setdefault(k, info)
+        k = classify.strip_tokens(f["model"])
+        if k:
+            by_release[f["release"]].setdefault(k, info)
+        if not f["hidden"]:
+            release_models[f["release"]].add(f["model_id"])
+
+    updates = []
+    depth = settings.get("release_depth")
+    for r in c.execute("SELECT id, logical_path FROM images").fetchall():
+        lp = PurePosixPath(r["logical_path"])
+        folders = list(lp.parent.parts)
+        key = _name_key(lp.stem)
+        release = classify.guess(r["logical_path"], depth).release
+        hidden = 0
+        for o in overrides:
+            pre = o["prefix"]
+            if r["logical_path"] == pre or r["logical_path"].startswith(pre.rstrip("/") + "/"):
+                release = o["release"] if o["release"] is not None else release
+                hidden = o["hidden"] if o["hidden"] is not None else hidden
+        info = next((roots[p] for p in ("/".join(folders[:i]) for i in range(len(folders), 0, -1)) if p in roots),
+                    None)
+        info = info or _name_match(key, loose.get(str(lp.parent), {})) or _name_match(key, by_release.get(release, {}))
+        cover = bool(_COVER_WORDS & set(classify.norm(lp.stem).split()))
+        rank = (0 if cover else 100) + len(folders)
+        if info:
+            mid, release, model_hidden = info
+            updates.append((release, mid, "model", rank, int(hidden or model_hidden), r["id"]))
+        else:
+            only = release_models.get(release, set())
+            mid = next(iter(only)) if len(only) == 1 else ""
+            updates.append((release, mid, "release", rank, hidden, r["id"]))
+    c.executemany("UPDATE images SET release=?, model_id=?, scope=?, rank=?, hidden=? WHERE id=?", updates)
+
+
+def _ids_in_chunks(q: str, ids: list[str]):
+    c = db.conn()
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        yield from c.execute(q % ",".join("?" * len(chunk)), chunk)
+
+
+def cover_image_ids(model_ids: list[str]) -> dict[str, int]:
+    """Best bundled picture per model: its own pictures before release ones."""
+    out: dict[str, int] = {}
+    q = ("SELECT model_id, id FROM images WHERE hidden=0 AND preview != 'error' AND model_id IN (%s) "
+         "ORDER BY model_id, scope != 'model', rank, name COLLATE NOCASE")
+    for r in _ids_in_chunks(q, model_ids):
+        out.setdefault(r["model_id"], r["id"])
+    return out
+
+
+def _image_dict(r):
+    return {"id": r["id"], "name": r["name"], "path": r["logical_path"], "scope": r["scope"],
+            "archive": r["rel_path"] if r["member"] else None, "size": r["size"]}
+
+
+def model_images(model_id: str) -> list[dict]:
+    rows = db.conn().execute("SELECT * FROM images WHERE model_id=? AND hidden=0 AND preview != 'error' "
+                             "ORDER BY scope != 'model', rank, name COLLATE NOCASE", (model_id,)).fetchall()
+    return [_image_dict(r) for r in rows]
+
+
+def release_images(release: str) -> list[dict]:
+    rows = db.conn().execute("SELECT * FROM images WHERE release=? AND scope='release' AND hidden=0 "
+                             "AND preview != 'error' ORDER BY rank, name COLLATE NOCASE", (release,)).fetchall()
+    return [_image_dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------- previews
@@ -328,6 +464,8 @@ def cache_path(row) -> Path:
 
 
 def _make_preview(row, data: bytes) -> bytes | None:
+    if row["ext"] in config.IMAGE_EXTS:
+        return render.image_thumbnail(data, settings.get("preview_size"))
     if row["ext"] in config.RENDERABLE_EXTS:
         return render.render_stl_bytes(data, settings.get("preview_size"))
     if row["ext"] in config.THUMBNAIL_EXTS:
@@ -346,29 +484,34 @@ def _make_preview(row, data: bytes) -> bytes | None:
     return None
 
 
+def _table(row) -> str:
+    return "images" if row["ext"] in config.IMAGE_EXTS else "files"
+
+
 def _store(row, data: bytes | None, error: str | None = None):
     c = db.conn()
+    table = _table(row)
     if data:
         p = cache_path(row)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
         tmp.write_bytes(data)
         os.replace(tmp, p)
-        c.execute("UPDATE files SET preview='ok', preview_error=NULL WHERE id=?", (row["id"],))
+        c.execute(f"UPDATE {table} SET preview='ok', preview_error=NULL WHERE id=?", (row["id"],))
     else:
-        c.execute("UPDATE files SET preview=?, preview_error=? WHERE id=?",
+        c.execute(f"UPDATE {table} SET preview=?, preview_error=? WHERE id=?",
                   ("error" if error else "none", error, row["id"]))
     c.commit()
 
 
-_render_locks: dict[int, threading.Lock] = defaultdict(threading.Lock)
+_render_locks: dict[tuple, threading.Lock] = defaultdict(threading.Lock)
 _on_demand = threading.BoundedSemaphore(2)  # cap CPU used by previews rendered on request
 
 
-def preview_for(file_id: int) -> Path | None:
-    """Return the cached preview, rendering it now if needed."""
+def preview_for(file_id: int, table: str = "files") -> Path | None:
+    """Return the cached preview of a file or picture, rendering it now if needed."""
     c = db.conn()
-    row = c.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+    row = c.execute(f"SELECT * FROM {table} WHERE id=?", (file_id,)).fetchone()
     if not row:
         return None
     p = cache_path(row)
@@ -376,7 +519,7 @@ def preview_for(file_id: int) -> Path | None:
         return p
     if row["preview"] in ("none", "error"):
         return None
-    with _render_locks[file_id]:
+    with _render_locks[(table, file_id)]:
         if p.exists():
             return p
         with _on_demand:
@@ -390,7 +533,12 @@ def _too_big(row) -> bool:
 
 
 def _render_rows(rows):
-    """Render previews for rows that share one physical file or archive."""
+    """Render previews for rows of one table that share one physical file or archive."""
+    c = db.conn()
+    for r in rows:  # already cached under the same content key (e.g. an archive re-read)
+        if r["preview"] == "pending" and cache_path(r).exists():
+            c.execute(f"UPDATE {_table(r)} SET preview='ok', preview_error=NULL WHERE id=?", (r["id"],))
+    c.commit()
     rows = [r for r in rows if not cache_path(r).exists()]
     for r in [r for r in rows if _too_big(r)]:
         _store(r, None, f"larger than the {settings.get('max_preview_mb')} MB preview limit")
@@ -464,6 +612,13 @@ def preview_worker(index: int = 0):
 
 def _render_pending():
     c = db.conn()
+    # Bundled pictures first: they are cheap and become covers.
+    for (rel_path,) in c.execute("SELECT DISTINCT rel_path FROM images WHERE preview='pending' AND hidden=0 "
+                                 "ORDER BY rel_path").fetchall():
+        rows = c.execute("SELECT * FROM images WHERE preview='pending' AND hidden=0 AND rel_path=?",
+                         (rel_path,)).fetchall()
+        preview_state["current"] = rel_path
+        _render_rows(rows)
     cover_ids = set(cover_file_ids().values())
     pending = c.execute("SELECT id, rel_path FROM files WHERE preview='pending' AND hidden=0 "
                         "ORDER BY rel_path").fetchall()
@@ -480,11 +635,12 @@ def _render_pending():
 def apply_settings_change(changed: dict):
     """Catch the library up after settings were changed in the app."""
     c = db.conn()
-    if "preview_size" in changed:
-        c.execute("UPDATE files SET preview='pending' WHERE preview='ok'")
-    if "max_preview_mb" in changed:
-        c.execute("UPDATE files SET preview='pending', preview_error=NULL "
-                  "WHERE preview='error' AND preview_error LIKE 'larger than%'")
+    for table in ("files", "images"):
+        if "preview_size" in changed:
+            c.execute(f"UPDATE {table} SET preview='pending' WHERE preview='ok'")
+        if "max_preview_mb" in changed:
+            c.execute(f"UPDATE {table} SET preview='pending', preview_error=NULL "
+                      "WHERE preview='error' AND preview_error LIKE 'larger than%'")
     c.commit()
     if "release_depth" in changed:
         request_reindex()

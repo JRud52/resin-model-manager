@@ -69,6 +69,7 @@ main { flex: 1; padding: 16px; min-width: 0; }
 .card:hover { border-color: var(--accent); }
 .thumb { aspect-ratio: 1; background: radial-gradient(circle at 50% 40%, #2a3038, #16191d); display: grid; place-items: center; overflow: hidden; }
 .thumb img { width: 100%; height: 100%; object-fit: contain; }
+.thumb img.photo { object-fit: cover; }
 .thumb .ph { color: var(--muted); font-size: 12px; text-align: center; padding: 8px; }
 .card .meta { padding: 8px 10px 10px; }
 .card .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -124,3 +125,13 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
   #grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   header h1 { font-size: 15px; }
 }
+#releaseImages { margin-bottom: 14px; }
+#releaseImages .side-title { padding: 0 0 6px; }
+#releaseImages .strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+.rimg { padding: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #16191d; flex-shrink: 0; cursor: zoom-in; }
+.rimg:hover { border-color: var(--accent); }
+.rimg img { display: block; height: 160px; width: auto; max-width: 320px; object-fit: cover; }
+#lightbox { padding: 8px; max-width: 95vw; max-height: 95vh; cursor: zoom-out; }
+#lightbox img { display: block; max-width: calc(95vw - 16px); max-height: calc(95vh - 48px); object-fit: contain; }
+#lightbox div { padding: 6px 2px 0; }
+.file img.photo { object-fit: cover; }

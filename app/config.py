@@ -32,6 +32,8 @@ MODEL_EXTS = {".stl", ".lys", ".ctx", ".ctb", ".chitubox", ".obj", ".3mf"}
 ARCHIVE_EXTS = {".zip", ".7z"}
 RENDERABLE_EXTS = {".stl"}
 THUMBNAIL_EXTS = {".lys", ".ctx", ".ctb", ".chitubox", ".3mf"}
+# Preview pictures shipped with releases and models.
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
 DB_PATH = DATA_DIR / "library.db"
 CACHE_DIR = DATA_DIR / "previews"

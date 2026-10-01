@@ -59,6 +59,27 @@ for name in ("Rat Captain", "Lich King", "Red Dragon"):
     assert r.headers["Content-Type"] == "image/webp" and len(r.read()) > 1000, name
 print("previews ok")
 
+# Bundled preview pictures: matched to models or releases, and shown before rendered STLs.
+def img_names(model):
+    return [i["name"] for i in get(f"/api/models/{models[model]['id']}")["images"]]
+assert img_names("Red Dragon") == ["Red_Dragon_render.png"], img_names("Red Dragon")
+assert img_names("Knight") == ["Knight_front.jpg"]
+assert img_names("Rat Captain") == ["rat_captain_preview.jpg"]
+assert img_names("Lich King") == ["lich_king.webp"]
+assert img_names("Orc Warboss") == ["Orc_Warboss.jpg"]
+assert img_names("Goblin Boss") == ["goblin_banner.png"], "single-model release uses the release picture"
+assert img_names("Rat Trooper") == [] and models["Rat Trooper"]["cover_image"] is None
+for name in ("Red Dragon", "Rat Captain", "Lich King", "Goblin Boss"):
+    assert models[name]["cover_image"], name
+    r = urllib.request.urlopen(f"{BASE}/api/images/{models[name]['cover_image']}/preview")
+    assert r.headers["Content-Type"] == "image/webp" and len(r.read()) > 100, name
+rel = [i["name"] for i in get("/api/releases/images?release=Dragon%20Lords")]
+assert rel == ["Dragon Lords Cover.jpg"], rel
+assert [i["name"] for i in get("/api/releases/images?release=Necro%20Lords")] == ["Necro Lords Promo.png"]
+full = urllib.request.urlopen(f"{BASE}/api/images/{models['Lich King']['cover_image']}/full").read()
+assert full[:4] == b"RIFF", "full picture streamed from the 7z"
+print("bundled pictures ok")
+
 # Downloads straight out of archives.
 for name in ("Rat Captain", "Lich King"):
     d = get(f"/api/models/{models[name]['id']}")
@@ -90,6 +111,8 @@ assert "Dragons" not in {t["tag"] for t in get("/api/tags")}
 d = get(f"/api/models/{rc}")
 post("/api/overrides", {"prefixes": d["roots"], "model": "Rat Commander", "release": "Space Rats", "from_model_id": rc})
 assert names("/api/models?tags=painted") == ["Rat Commander"]
+rcm = next(m for m in get("/api/models")["items"] if m["model"] == "Rat Commander")
+assert rcm["cover_image"], "pictures follow a renamed model"
 print("tags ok")
 
 # Creators: set on releases in bulk, filter and search by them, clear one.
@@ -139,6 +162,9 @@ assert put("Uploaded Release/Gnome/Gnome.stl", stl)["status"] == "saved"
 assert put("Tank Pack.zip", zbuf.getvalue())["status"] == "saved"
 assert put("Uploaded Release/Gnome/Gnome.stl", stl)["status"] == "exists"
 assert put("Uploaded Release/Gnome/Gnome.stl", stl + b"\0")["path"] == "Uploaded Release/Gnome/Gnome (2).stl"
+from PIL import Image
+pbuf = io.BytesIO(); Image.new("RGB", (300, 200), "teal").save(pbuf, "PNG")
+assert put("Uploaded Release/Gnome/gnome.png", pbuf.getvalue())["status"] == "saved"
 for bad in ("../escape.stl", "/abs/../../x.stl", "notes.txt", ".hidden/x.stl"):
     try:
         put(bad, stl)
@@ -153,6 +179,7 @@ models = {(m["release"], m["model"]): m for m in get("/api/models")["items"]}
 assert models[("Tank Pack", "Hover Tank")]["creator"] == "Tank Works"
 assert models[("Uploaded Release", "Gnome")]["creator"] == ""
 assert ("Uploaded Release", "Gnome") in models, sorted(models)
+assert models[("Uploaded Release", "Gnome")]["cover_image"], "uploaded picture used as cover"
 tank = models[("Tank Pack", "Hover Tank")]
 assert tank["supported_files"] == 1 and tank["unsupported_files"] == 1, tank
 print("uploads ok")
