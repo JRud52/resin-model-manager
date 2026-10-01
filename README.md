@@ -94,3 +94,7 @@ python tests/smoke_test.py http://localhost:8080 /tmp/rmm/src
 
 Stack: Python 3.12, FastAPI, SQLite, numpy + Pillow renderer, py7zr; plain
 HTML/JS front end with no build step.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
