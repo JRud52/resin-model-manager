@@ -84,8 +84,8 @@ login.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DATA_PATH` | `/volume1/resin-manager/data` | The app's own data: database, settings and preview images. Create it first. |
-| `LIBRARY_PATH` | `/volume1/resin-manager/library` | Your model files. Everything you import is copied here. Create it first; it can be on a different share from `DATA_PATH`. |
+| `DATA_PATH` | `/volume1/docker/resin-manager` | The app's own data: database, settings and preview images. Create it first. |
+| `LIBRARY_PATH` | `/volume1/3d-library` | Your model files. Everything you import is copied here. Create it first; it can be on a different share from `DATA_PATH`. |
 | `PUID` / `PGID` | `1000` | Your NAS user (`id -u`, `id -g`), so copied files belong to you. |
 | `PORT` | `8417` | Port on the NAS. |
 | `SOURCE_PATH` | *(none)* | Optional. An existing library on the NAS, mounted read-only so the Import dialog can copy it in. Leave it out to start from an empty library. |
@@ -104,11 +104,6 @@ login.
    that finishes building a few minutes after the commit is still picked up.
    The container is only recreated when the image actually changed.
 4. **Deploy the stack**, open `http://<nas>:8417` and click **Import files**.
-
-Upgrading a stack that only sets `STORAGE_PATH`: it keeps working unchanged,
-using `STORAGE_PATH/data` and `STORAGE_PATH/library`. To split them, move or
-leave those folders where you like, then replace `STORAGE_PATH` with
-`DATA_PATH` and `LIBRARY_PATH` pointing at them.
 
 Don't use a compose file with a `build:` section in Portainer: it builds once
 and then keeps reusing the old image on updates.

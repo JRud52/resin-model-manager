@@ -14,12 +14,11 @@ services:
       - "${PORT:-8417}:8417"
     volumes:
       # Create both folders first, owned by your NAS user. They can be on
-      # different shares. (Stacks set up before the split only set STORAGE_PATH;
-      # they keep using its data/ and library/ folders until these are set.)
+      # different shares.
       # The app's own data: database, settings and preview image cache.
-      - ${DATA_PATH:-${STORAGE_PATH:-/volume1/resin-manager}/data}:/data
+      - ${DATA_PATH:-/volume1/docker/resin-manager}:/data
       # Your model files: everything you import is copied here.
-      - ${LIBRARY_PATH:-${STORAGE_PATH:-/volume1/resin-manager}/library}:/library
+      - ${LIBRARY_PATH:-/volume1/3d-library}:/library
       # Optional: set SOURCE_PATH to an existing library on the NAS to copy it
       # in from the Import dialog. Read-only, so the app can never change those
       # files. Left unset, an empty placeholder volume is mounted instead.
