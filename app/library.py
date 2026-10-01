@@ -282,22 +282,27 @@ def reclassify():
     for r in rows:
         lp = PurePosixPath(r["logical_path"])
         by_folder[str(lp.parent)].append(lp.stem)
+    release_creators = {r["release"].lower(): r["creator"]
+                        for r in c.execute("SELECT release, creator FROM release_creators")}
     updates = []
     for r in rows:
         lp = r["logical_path"]
         g = classify.guess(lp, settings.get("release_depth"), by_folder[str(PurePosixPath(lp).parent)])
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
+        creator = g.creator
         for o in overrides:
             pre = o["prefix"]
             if lp == pre or lp.startswith(pre.rstrip("/") + "/"):
                 release = o["release"] if o["release"] is not None else release
                 model = o["model"] if o["model"] is not None else model
                 option = o["option"] if o["option"] is not None else option
+                creator = o["creator"] if o["creator"] is not None else creator
                 if o["supported"] is not None:  # 1 supported, 0 unsupported, -1 unknown
                     supported = None if o["supported"] == -1 else bool(o["supported"])
                 hidden = o["hidden"] if o["hidden"] is not None else hidden
+        creator = release_creators.get(release.lower(), creator)
         sup = None if supported is None else int(supported)
-        updates.append([g.creator, release, model, model_id(release, model), option, sup,
+        updates.append([creator, release, model, model_id(release, model), option, sup,
                         g.model_root, hidden, r["id"]])
     # A file with no support marker next to "<same name> supported" is the unsupported copy.
     stems = {r["id"]: classify.strip_tokens(PurePosixPath(r["logical_path"]).stem) for r in rows}
