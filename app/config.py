@@ -13,7 +13,7 @@ def _int(name: str, default: int) -> int:
 SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", "/source"))
 # The managed copy the app indexes and serves.
 LIBRARY_DIR = Path(os.environ.get("LIBRARY_DIR", "/library"))
-# Database and preview image cache.
+# Database, settings and preview image cache.
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 
 # How many folder levels sit above the release folder (e.g. 1 for Creator/Release/...).

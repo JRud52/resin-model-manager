@@ -84,7 +84,8 @@ login.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `STORAGE_PATH` | `/volume1/resin-manager` | An empty folder for the app (create it first). The imported copy goes in `library/`, the database and previews in `data/`. |
+| `DATA_PATH` | `/volume1/docker/resin-manager` | The app's own data: database, settings and preview images. Create it first. |
+| `LIBRARY_PATH` | `/volume1/3d-library` | Your model files. Everything you import is copied here. Create it first; it can be on a different share from `DATA_PATH`. |
 | `PUID` / `PGID` | `1000` | Your NAS user (`id -u`, `id -g`), so copied files belong to you. |
 | `PORT` | `8417` | Port on the NAS. |
 | `SOURCE_PATH` | *(none)* | Optional. An existing library on the NAS, mounted read-only so the Import dialog can copy it in. Leave it out to start from an empty library. |
@@ -94,7 +95,7 @@ login.
 1. **Stacks → Add stack → Repository.** Repository URL
    `https://github.com/JRud52/resin-model-manager`, reference `refs/heads/main`,
    compose path `docker-compose.yml`.
-2. Under **Environment variables**, add `STORAGE_PATH`, `PUID` and `PGID`, plus
+2. Under **Environment variables**, add `DATA_PATH`, `LIBRARY_PATH`, `PUID` and `PGID`, plus
    `SOURCE_PATH` if you have an existing library to bring in (and `PORT` if
    8417 is taken).
 3. Turn on **GitOps updates**, mechanism **Polling** (e.g. every `5m`), and turn
