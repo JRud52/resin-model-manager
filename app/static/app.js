@@ -596,10 +596,10 @@ window.addEventListener("drop", async (e) => {
   addToQueue(items);
 });
 
-function putFile(path, file, onProgress) {
+function putFile(path, depth, file, onProgress) {
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest();
-    x.open("PUT", `/api/upload?path=${encodeURIComponent(path)}&size=${file.size}`);
+    x.open("PUT", `/api/upload?path=${encodeURIComponent(path)}&size=${file.size}&depth=${depth}`);
     x.upload.onprogress = (e) => onProgress(e.loaded);
     x.onload = () => x.status < 300 ? resolve(JSON.parse(x.responseText))
       : reject(new Error(JSON.parse(x.responseText || "{}").detail || x.statusText));
@@ -607,12 +607,11 @@ function putFile(path, file, onProgress) {
     x.send(file);
   });
 }
-// Logical path prefix the uploaded item ends up under (archives are read as folders).
-const topPrefix = (folder, rel) => folder || rel.split("/")[0].replace(/\.(zip|7z)$/i, "");
-
 $("#uploadBtn").onclick = async () => {
   const folder = $("#uploadFolder").value.trim().replace(/^\/+|\/+$/g, "");
-  const creator = $("#uploadCreator").value.trim();
+  // With a creator, uploads are filed as Creator / Release / ..., next to that creator's other releases.
+  const creator = $("#uploadCreator").value.trim().replace(/[\/\\]+/g, "-").replace(/^\.+/, "");
+  const prefix = [creator, folder].filter(Boolean).join("/");
   const items = upload.queue.splice(0);
   const total = items.reduce((n, it) => n + it.file.size, 0) || 1;
   const bar = $("#uploadProgress");
@@ -622,19 +621,13 @@ $("#uploadBtn").onclick = async () => {
   for (const [i, it] of items.entries()) {
     renderQueue(`Uploading ${i + 1} of ${items.length}: ${it.rel}`);
     try {
-      const r = await putFile(folder ? `${folder}/${it.rel}` : it.rel, it.file, (n) => (bar.value = (sent + n) / total));
+      const r = await putFile(prefix ? `${prefix}/${it.rel}` : it.rel, creator ? 1 : 0, it.file, (n) => (bar.value = (sent + n) / total));
       r.status === "exists" ? existed++ : saved++;
     } catch (err) { failed.push(`${it.rel}: ${err.message}`); }
     sent += it.file.size;
   }
   bar.classList.add("hidden");
   upload.busy = false; upload.skipped = 0;
-  const done = items.filter((it) => !failed.some((f) => f.startsWith(`${it.rel}: `)));
-  if (creator && done.length) {  // stored as a correction rule, so it survives re-indexing
-    const prefixes = [...new Set(done.map((it) => topPrefix(folder, it.rel)))];
-    try { await api("/api/overrides", { method: "POST", body: JSON.stringify({ prefixes, creator }) }); }
-    catch (err) { failed.push(`creator: ${err.message}`); }
-  }
   if (saved) { await api("/api/index", { method: "POST" }); wasRunning = true; }
   renderQueue(`Uploaded ${saved} file${saved === 1 ? "" : "s"}${existed ? `, ${existed} already in the library` : ""}${failed.length ? `, ${failed.length} failed` : ""}.` +
     (saved ? " Indexing now; previews follow in the background." : ""));

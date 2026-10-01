@@ -98,10 +98,88 @@ def upload_target(rel: str) -> Path:
     return target
 
 
-async def save_upload(rel: str, size: int, chunks) -> dict:
+# ---------------------------------------------------------------- folder layouts
+
+def _top_key(rel: str) -> str | None:
+    """The top-level library folder a path belongs to, with archives read as folders
+    (``Release.zip`` -> ``Release``); None for a loose file at the library root."""
+    parts = PurePosixPath(rel).parts
+    if len(parts) > 1:
+        return parts[0]
+    p = PurePosixPath(rel)
+    return p.stem if p.suffix.lower() in config.ARCHIVE_EXTS else None
+
+
+def folder_layouts() -> dict[str, int]:
+    return {r["folder"]: r["depth"] for r in db.conn().execute("SELECT folder, depth FROM folder_layouts")}
+
+
+def depth_for(logical_path: str, layouts: dict[str, int], default: int) -> int:
+    top = PurePosixPath(logical_path).parts[0]
+    return layouts.get(top, default)
+
+
+def record_layout(rel: str, depth: int):
+    """Remember how a top-level folder is organised when an upload creates it.
+
+    An existing record is kept. A plain upload into a folder that is already in
+    the library without a record (e.g. part of a copied NAS library) records
+    nothing, so it keeps following the Settings value."""
+    top = _top_key(rel)
+    if top is None:
+        return
+    c = db.conn()
+    if c.execute("SELECT 1 FROM folder_layouts WHERE folder = ?", (top,)).fetchone():
+        return
+    if depth == 0 and (config.LIBRARY_DIR / top).exists():
+        return
+    c.execute("INSERT INTO folder_layouts(folder, depth) VALUES (?, ?)", (top, depth))
+    c.commit()
+
+
+def _top_entries(root: Path) -> set[str]:
+    out = set()
+    try:
+        for e in root.iterdir():
+            if e.name.startswith(".") or e.name in ("@eaDir", "#recycle"):
+                continue
+            if e.is_dir():
+                out.add(e.name)
+            elif e.suffix.lower() in config.ARCHIVE_EXTS:
+                out.add(e.stem)
+    except OSError:
+        pass
+    return out
+
+
+def migrate_layouts() -> bool:
+    """One-time step for libraries indexed before layouts were recorded per folder:
+    top-level folders that are not in the mounted NAS library were uploaded from the
+    browser, so they are Release / Model. Returns True when anything was recorded."""
+    c = db.conn()
+    if c.execute("SELECT 1 FROM settings WHERE key = 'layouts_migrated'").fetchone():
+        return False
+    if not source_available():
+        if c.execute("SELECT 1 FROM files LIMIT 1").fetchone():
+            return False  # can't tell copied folders from uploads; try again once SOURCE_PATH is mounted
+        changed = False
+    else:
+        uploaded = _top_entries(config.LIBRARY_DIR) - _top_entries(config.SOURCE_DIR)
+        known = set(folder_layouts())
+        c.executemany("INSERT INTO folder_layouts(folder, depth) VALUES (?, 0)",
+                      [(f,) for f in sorted(uploaded - known)])
+        changed = bool(uploaded - known)
+    c.execute("INSERT INTO settings(key, value) VALUES ('layouts_migrated', '1')")
+    c.commit()
+    return changed
+
+
+async def save_upload(rel: str, size: int, chunks, depth: int = 0) -> dict:
     """Stream an uploaded file into the library. An identical-size file already
-    there is kept as is; a different file with the same name gets a numbered name."""
+    there is kept as is; a different file with the same name gets a numbered name.
+    `depth` is the layout of the uploaded path: 0 Release/..., 1 Creator/Release/..."""
     target = upload_target(rel)
+    record_layout(target.relative_to(config.LIBRARY_DIR.resolve()).as_posix(), depth)
     if target.exists():
         if target.stat().st_size == size:
             async for _ in chunks:
@@ -297,10 +375,11 @@ def reclassify():
         by_folder[str(lp.parent)].append(lp.stem)
     release_creators = {r["release"].lower(): r["creator"]
                         for r in c.execute("SELECT release, creator FROM release_creators")}
+    layouts, default_depth = folder_layouts(), settings.get("release_depth")
     updates = []
     for r in rows:
         lp = r["logical_path"]
-        g = classify.guess(lp, settings.get("release_depth"), by_folder[str(PurePosixPath(lp).parent)])
+        g = classify.guess(lp, depth_for(lp, layouts, default_depth), by_folder[str(PurePosixPath(lp).parent)])
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
         creator = g.creator
         for o in overrides:
@@ -394,12 +473,12 @@ def match_images(c, overrides):
             release_models[f["release"]].add(f["model_id"])
 
     updates = []
-    depth = settings.get("release_depth")
+    layouts, default_depth = folder_layouts(), settings.get("release_depth")
     for r in c.execute("SELECT id, logical_path FROM images").fetchall():
         lp = PurePosixPath(r["logical_path"])
         folders = list(lp.parent.parts)
         key = _name_key(lp.stem)
-        release = classify.guess(r["logical_path"], depth).release
+        release = classify.guess(r["logical_path"], depth_for(r["logical_path"], layouts, default_depth)).release
         hidden = 0
         for o in overrides:
             pre = o["prefix"]
