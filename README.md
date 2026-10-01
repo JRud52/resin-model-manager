@@ -54,6 +54,11 @@ GitHub Actions builds the image on every push to `main` and publishes it as
 `docker-compose.yml` needs editing: folder paths, user and port come from
 environment variables (see `.env.example` for the full list).
 
+The first time the workflow runs, GitHub creates the package as private. Make
+it public once (GitHub → your profile → **Packages** → `resin-model-manager` →
+**Package settings** → **Change visibility**) so the NAS can pull it without a
+login.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SOURCE_PATH` | `/volume1/3d-models` | Your existing library, mounted read-only at `/source`. |
