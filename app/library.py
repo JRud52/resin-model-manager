@@ -133,6 +133,15 @@ def _safe_rel(p: Path, root: Path) -> str:
     return p.relative_to(root).as_posix()
 
 
+def source_available() -> bool:
+    """True when an existing library is mounted at SOURCE_DIR (compose mounts an
+    empty placeholder volume there when SOURCE_PATH is not set)."""
+    try:
+        return config.SOURCE_DIR.is_dir() and any(config.SOURCE_DIR.iterdir())
+    except OSError:
+        return False
+
+
 def import_library():
     """Copy SOURCE_DIR into LIBRARY_DIR. Never writes to SOURCE_DIR.
 
@@ -140,8 +149,8 @@ def import_library():
     skipped, so re-running an import only copies what is new or changed.
     """
     src, dst = config.SOURCE_DIR.resolve(), config.LIBRARY_DIR.resolve()
-    if not src.is_dir():
-        raise RuntimeError(f"Source folder {src} does not exist")
+    if not source_available():
+        raise RuntimeError(f"No existing library is mounted at {src}")
     if src == dst or dst.is_relative_to(src) or src.is_relative_to(dst):
         raise RuntimeError("Source and library folders must be separate")
     job.message = "Counting files in source"

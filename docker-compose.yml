@@ -16,6 +16,10 @@ services:
       # The app's own folder (create it first, owned by your NAS user). Imported
       # files go in library/, the database and preview cache in data/.
       - ${STORAGE_PATH:-/volume1/resin-manager}:/storage
-      # Optional: an existing library on the NAS to copy in from the Import
-      # dialog. Read-only, so the app can never change those files.
-      # - /volume1/3d-models:/source:ro
+      # Optional: set SOURCE_PATH to an existing library on the NAS to copy it
+      # in from the Import dialog. Read-only, so the app can never change those
+      # files. Left unset, an empty placeholder volume is mounted instead.
+      - ${SOURCE_PATH:-no-source}:/source:ro
+
+volumes:
+  no-source:

@@ -47,7 +47,7 @@ def status():
         "previews": counts,
         "rendering": library.preview_state["current"],
         "source_dir": str(config.SOURCE_DIR),
-        "source_available": config.SOURCE_DIR.is_dir(),
+        "source_available": library.source_available(),
         "library_dir": str(config.LIBRARY_DIR),
         "version": __version__,
         "commit": config.GIT_COMMIT,

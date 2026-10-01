@@ -16,7 +16,7 @@ groups them by **release** and **model**, separates **supported** and
   in (usually the release name); otherwise each archive or folder becomes its
   own release. A file that is already there with the same size is skipped; a
   different file with the same name is kept under a numbered name. If an
-  existing library on the NAS is mounted read-only at `/source`, the Import
+  existing library on the NAS is set as `SOURCE_PATH` (mounted read-only), the Import
   dialog can also copy it in; the originals are never changed.
 * **Grouping.** Each file's path is read with archives treated as folders
   (`Release/Heroes.zip` → `Release/Heroes/...`). The top folder is the release
@@ -70,14 +70,16 @@ login.
 | `STORAGE_PATH` | `/volume1/resin-manager` | An empty folder for the app (create it first). The imported copy goes in `library/`, the database and previews in `data/`. |
 | `PUID` / `PGID` | `1000` | Your NAS user (`id -u`, `id -g`), so copied files belong to you. |
 | `PORT` | `8417` | Port on the NAS. |
+| `SOURCE_PATH` | *(none)* | Optional. An existing library on the NAS, mounted read-only so the Import dialog can copy it in. Leave it out to start from an empty library. |
 
 ### With Portainer (auto-updates from Git)
 
 1. **Stacks → Add stack → Repository.** Repository URL
    `https://github.com/JRud52/resin-model-manager`, reference `refs/heads/main`,
    compose path `docker-compose.yml`.
-2. Under **Environment variables**, add `STORAGE_PATH`, `PUID` and `PGID` (and
-   `PORT` if 8417 is taken).
+2. Under **Environment variables**, add `STORAGE_PATH`, `PUID` and `PGID`, plus
+   `SOURCE_PATH` if you have an existing library to bring in (and `PORT` if
+   8417 is taken).
 3. Turn on **GitOps updates**, mechanism **Polling** (e.g. every `5m`), and turn
    on **Re-pull image** and **Force redeployment**. Force redeployment makes
    every poll pull the image even when the repo has no new commit, so an image
@@ -106,9 +108,8 @@ the header. Rendering previews for a large library takes a while the first
 time; after that they come from the cache.
 
 To copy in an existing library that is already on the NAS instead of
-uploading it, uncomment the `/source` line in `docker-compose.yml` (with
-Portainer that means deploying from your own fork or copy of the compose
-file). The Import dialog then shows *Copy from NAS folder*.
+uploading it, set `SOURCE_PATH`. The Import dialog then shows *Copy from NAS
+folder*.
 
 ### Settings
 
