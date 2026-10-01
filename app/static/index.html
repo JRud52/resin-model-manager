@@ -27,7 +27,8 @@
   <div id="jobStatus" class="muted"></div>
   <button id="scanBtn">Rescan</button>
   <button id="importBtn" class="primary">Import library</button>
-  <button id="rulesBtn" class="icon" title="Corrections">⚙</button>
+  <button id="rulesBtn" class="icon" title="Corrections">✎</button>
+  <button id="settingsBtn" class="icon" title="Settings">⚙</button>
 </header>
 <div id="layout">
   <aside id="sidebar">
@@ -121,6 +122,37 @@
   <p class="muted small">Each rule applies to every file whose path starts with the folder shown. Delete a rule to go back to the automatic guess.</p>
   <table id="rulesTable"></table>
   <div class="row" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
+</dialog>
+
+<dialog id="settingsDlg">
+  <form id="settingsForm" method="dialog" class="card-form">
+    <h3>Settings</h3>
+    <label>Folders above each release
+      <select name="release_depth">
+        <option value="0">0: Release / Model / files</option>
+        <option value="1">1: Creator / Release / Model / files</option>
+        <option value="2">2: Group / Creator / Release / Model / files</option>
+      </select>
+    </label>
+    <label>Rescan the library automatically
+      <select name="scan_interval_minutes">
+        <option value="0">Never (use Rescan)</option>
+        <option value="60">Every hour</option>
+        <option value="360">Every 6 hours</option>
+        <option value="1440">Every day</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="prerender"> Render all previews in the background</label>
+    <label>Background render threads <input name="preview_workers" type="number" min="1" max="8" required></label>
+    <label>Preview size (pixels) <input name="preview_size" type="number" min="128" max="2048" step="64" required></label>
+    <label>Skip previews for files larger than (MB) <input name="max_preview_mb" type="number" min="1" required></label>
+    <p class="muted small">Changing the folder setting rescans the library. Changing the preview size re-renders every preview.</p>
+    <p class="muted small" id="settingsErr"></p>
+    <div class="row">
+      <button value="save" class="primary">Save</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
 </dialog>
 
 <dialog id="releaseTagDlg">

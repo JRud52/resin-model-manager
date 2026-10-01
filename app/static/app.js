@@ -350,6 +350,38 @@ $("#rulesTable").addEventListener("click", async (e) => {
 });
 $("#retryBtn").onclick = async () => { await api("/api/previews/retry", { method: "POST" }); $("#retryBtn").textContent = "Queued"; };
 
+// ------------------------------------------------------------ settings
+
+function setSelect(sel, value) {
+  // Keep values saved outside the presets (e.g. from an old env var) selectable.
+  if (![...sel.options].some((o) => o.value === String(value))) sel.add(new Option(String(value), value));
+  sel.value = value;
+}
+$("#settingsBtn").onclick = async () => {
+  const s = await api("/api/settings");
+  const f = $("#settingsForm");
+  setSelect(f.release_depth, s.release_depth);
+  setSelect(f.scan_interval_minutes, s.scan_interval_minutes);
+  f.prerender.checked = !!s.prerender;
+  f.preview_workers.value = s.preview_workers;
+  f.preview_size.value = s.preview_size;
+  f.max_preview_mb.value = s.max_preview_mb;
+  $("#settingsErr").textContent = "";
+  $("#settingsDlg").showModal();
+};
+$("#settingsForm").addEventListener("submit", async (e) => {
+  if (e.submitter?.value !== "save") return;
+  e.preventDefault();
+  const f = e.target;
+  const body = { prerender: f.prerender.checked ? 1 : 0 };
+  for (const k of ["release_depth", "scan_interval_minutes", "preview_workers", "preview_size", "max_preview_mb"]) body[k] = Number(f[k].value);
+  try {
+    await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+    $("#settingsDlg").close();
+    wasRunning = true;
+  } catch (err) { $("#settingsErr").textContent = err.message; }
+});
+
 // ------------------------------------------------------------ jobs & status
 
 let wasRunning = false;

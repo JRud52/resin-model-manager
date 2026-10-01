@@ -2,7 +2,7 @@
 
     python tests/make_sample_library.py /tmp/rmm/src
     (start the app with SOURCE_DIR=/tmp/rmm/src)
-    python tests/smoke_test.py http://localhost:8080 /tmp/rmm/src
+    python tests/smoke_test.py http://localhost:8417 /tmp/rmm/src
 """
 import hashlib
 import json

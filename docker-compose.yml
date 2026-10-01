@@ -1,27 +1,21 @@
-# Settings come from environment variables so this file never needs editing.
-# In Portainer, set them under the stack's "Environment variables"; with plain
-# docker compose, put them in a `.env` file next to this one (see .env.example).
+# Only folders, your NAS user and the port are set here; everything else is in
+# the app's Settings (⚙). In Portainer, set these under the stack's
+# "Environment variables"; with plain docker compose, put them in a `.env` file
+# next to this one (see .env.example). Unset values use the defaults shown.
 services:
   resin-models:
     # Built from main by GitHub Actions (.github/workflows/docker.yml).
-    image: ghcr.io/jrud52/resin-model-manager:${IMAGE_TAG:-latest}
+    image: ghcr.io/jrud52/resin-model-manager:latest
     container_name: resin-models
     restart: unless-stopped
-    # Files written to /library and /data belong to this NAS user (`id -u`, `id -g`).
+    # Files the app writes belong to this NAS user (`id -u`, `id -g`).
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
-      - "${PORT:-8080}:8080"
-    environment:
-      RELEASE_DEPTH: ${RELEASE_DEPTH:-0}                  # 1 if your library is Creator/Release/...
-      PREVIEW_WORKERS: ${PREVIEW_WORKERS:-1}              # background render threads
-      PRERENDER: ${PRERENDER:-1}                          # render every STL in the background
-      PREVIEW_SIZE: ${PREVIEW_SIZE:-512}
-      SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-0}  # e.g. 60 to pick up new files hourly
-      MAX_PREVIEW_MB: ${MAX_PREVIEW_MB:-1024}
+      - "${PORT:-8417}:8417"
     volumes:
       # Your existing library. Read-only: the app can never change these files.
       - ${SOURCE_PATH:-/volume1/3d-models}:/source:ro
-      # Where the imported copy lives (must be a different folder).
-      - ${LIBRARY_PATH:-/volume1/resin-manager/library}:/library
-      # Database and cached preview images.
-      - ${DATA_PATH:-/volume1/resin-manager/data}:/data
+      # The app's own folder (create it first, owned by your NAS user). The app
+      # puts the imported copy in library/ and its database and preview cache
+      # in data/. Must be outside SOURCE_PATH.
+      - ${STORAGE_PATH:-/volume1/resin-manager}:/storage

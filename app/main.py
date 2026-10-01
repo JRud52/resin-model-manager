@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, archives, config, db, library
+from . import __version__, archives, config, db, library, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = FastAPI(title="Resin Model Manager", version=__version__)
@@ -23,8 +23,8 @@ def startup():
     db.init()
     for d in (config.LIBRARY_DIR, config.CACHE_DIR):
         d.mkdir(parents=True, exist_ok=True)
-    for _ in range(config.PREVIEW_WORKERS):
-        threading.Thread(target=library.preview_worker, daemon=True).start()
+    for i in range(settings.MAX_WORKERS):
+        threading.Thread(target=library.preview_worker, args=(i,), daemon=True).start()
     threading.Thread(target=library.scheduler, daemon=True).start()
     library._preview_wakeup.set()
 
@@ -53,6 +53,21 @@ def status():
         "version": __version__,
         "commit": config.GIT_COMMIT,
     }
+
+
+@app.get("/api/settings")
+def get_settings():
+    return settings.values()
+
+
+@app.put("/api/settings")
+def put_settings(changes: dict[str, int]):
+    try:
+        changed = settings.update(changes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    library.apply_settings_change(changed)
+    return settings.values()
 
 
 @app.post("/api/import")

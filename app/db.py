@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS model_tags (
 );
 CREATE INDEX IF NOT EXISTS model_tags_tag ON model_tags(tag);
 
+-- Values saved from the Settings dialog (see settings.py).
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- User corrections. Applied to every file whose logical path starts with prefix;
 -- longer prefixes win. NULL columns leave the heuristic value alone.
 CREATE TABLE IF NOT EXISTS overrides (

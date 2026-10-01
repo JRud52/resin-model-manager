@@ -11,7 +11,7 @@ import traceback
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
 
-from . import archives, classify, config, db, render
+from . import archives, classify, config, db, render, settings
 
 log = logging.getLogger("rmm")
 
@@ -218,7 +218,7 @@ def reclassify():
     updates = []
     for r in rows:
         lp = r["logical_path"]
-        g = classify.guess(lp, config.RELEASE_DEPTH, by_folder[str(PurePosixPath(lp).parent)])
+        g = classify.guess(lp, settings.get("release_depth"), by_folder[str(PurePosixPath(lp).parent)])
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
         for o in overrides:
             pre = o["prefix"]
@@ -250,16 +250,16 @@ def reclassify():
 # ---------------------------------------------------------------- previews
 
 def cache_path(row) -> Path:
-    key = f"{row['rel_path']}\x00{row['member']}\x00{row['size']}\x00{row['mtime']}\x00{config.PREVIEW_SIZE}"
+    key = f"{row['rel_path']}\x00{row['member']}\x00{row['size']}\x00{row['mtime']}\x00{settings.get('preview_size')}"
     h = hashlib.sha1(key.encode()).hexdigest()
     return config.CACHE_DIR / h[:2] / f"{h}.webp"
 
 
 def _make_preview(row, data: bytes) -> bytes | None:
     if row["ext"] in config.RENDERABLE_EXTS:
-        return render.render_stl_bytes(data, config.PREVIEW_SIZE)
+        return render.render_stl_bytes(data, settings.get("preview_size"))
     if row["ext"] in config.THUMBNAIL_EXTS:
-        thumb = render.embedded_thumbnail(data, config.PREVIEW_SIZE)
+        thumb = render.embedded_thumbnail(data, settings.get("preview_size"))
         if thumb is None and data[:2] == b"PK":
             import io, zipfile
             try:
@@ -267,7 +267,7 @@ def _make_preview(row, data: bytes) -> bytes | None:
                     imgs = [i for i in z.infolist() if i.filename.lower().endswith((".png", ".jpg", ".jpeg"))]
                     if imgs:
                         best = max(imgs, key=lambda i: i.file_size)
-                        thumb = render.embedded_thumbnail(z.read(best), config.PREVIEW_SIZE)
+                        thumb = render.embedded_thumbnail(z.read(best), settings.get("preview_size"))
             except zipfile.BadZipFile:
                 pass
         return thumb
@@ -314,14 +314,14 @@ def preview_for(file_id: int) -> Path | None:
 
 
 def _too_big(row) -> bool:
-    return row["size"] > config.MAX_PREVIEW_MB * 1024 * 1024
+    return row["size"] > settings.get("max_preview_mb") * 1024 * 1024
 
 
 def _render_rows(rows):
     """Render previews for rows that share one physical file or archive."""
     rows = [r for r in rows if not cache_path(r).exists()]
     for r in [r for r in rows if _too_big(r)]:
-        _store(r, None, f"larger than MAX_PREVIEW_MB ({config.MAX_PREVIEW_MB} MB)")
+        _store(r, None, f"larger than the {settings.get('max_preview_mb')} MB preview limit")
     rows = [r for r in rows if not _too_big(r)]
     if not rows:
         return
@@ -373,12 +373,14 @@ def cover_file_ids(model_ids: list[str] | None = None) -> dict[str, int]:
 preview_state = {"current": None}
 
 
-def preview_worker():
-    """Background renderer. Model covers first, then every other file."""
+def preview_worker(index: int = 0):
+    """Background renderer. Model covers first, then every other file.
+
+    MAX_WORKERS of these are started; only the first `preview_workers` do work."""
     while True:
         _preview_wakeup.wait(timeout=60)
         _preview_wakeup.clear()
-        if not config.PRERENDER:
+        if not settings.get("prerender") or index >= settings.get("preview_workers"):
             continue
         try:
             _render_pending()
@@ -404,8 +406,25 @@ def _render_pending():
 
 
 def scheduler():
-    if config.SCAN_INTERVAL_MINUTES <= 0:
-        return
+    """Rescan every `scan_interval_minutes` (0 = off); rereads the setting each minute."""
+    last = time.monotonic()
     while True:
-        time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
+        time.sleep(60)
+        minutes = settings.get("scan_interval_minutes")
+        if minutes > 0 and time.monotonic() - last >= minutes * 60:
+            last = time.monotonic()
+            run_job("scan", scan)
+
+
+def apply_settings_change(changed: dict):
+    """Catch the library up after settings were changed in the app."""
+    c = db.conn()
+    if "preview_size" in changed:
+        c.execute("UPDATE files SET preview='pending' WHERE preview='ok'")
+    if "max_preview_mb" in changed:
+        c.execute("UPDATE files SET preview='pending', preview_error=NULL "
+                  "WHERE preview='error' AND preview_error LIKE 'larger than%'")
+    c.commit()
+    if "release_depth" in changed:
         run_job("scan", scan)
+    _preview_wakeup.set()
