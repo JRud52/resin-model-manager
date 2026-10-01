@@ -22,8 +22,6 @@ PREVIEW_SIZE = _int("PREVIEW_SIZE", 512)
 PREVIEW_WORKERS = max(1, _int("PREVIEW_WORKERS", 1))
 # Render previews for every STL in the background (otherwise only on demand).
 PRERENDER = os.environ.get("PRERENDER", "1") not in ("0", "false", "no")
-# Automatically rescan the library every N minutes (0 = off).
-SCAN_INTERVAL_MINUTES = _int("SCAN_INTERVAL_MINUTES", 0)
 # Skip previews for STLs larger than this many MB (protects small NAS boxes).
 MAX_PREVIEW_MB = _int("MAX_PREVIEW_MB", 1024)
 

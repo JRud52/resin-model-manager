@@ -15,7 +15,6 @@ FIELDS = {
     "preview_workers": (min(config.PREVIEW_WORKERS, MAX_WORKERS), 1, MAX_WORKERS),
     "prerender": (int(config.PRERENDER), 0, 1),
     "preview_size": (config.PREVIEW_SIZE, 128, 2048),
-    "scan_interval_minutes": (config.SCAN_INTERVAL_MINUTES, 0, 7 * 24 * 60),
     "max_preview_mb": (config.MAX_PREVIEW_MB, 1, 100_000),
 }
 

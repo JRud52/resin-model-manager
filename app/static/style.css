@@ -70,6 +70,10 @@ main { flex: 1; padding: 16px; min-width: 0; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 16px; max-width: min(1100px, 96vw); width: 100%; }
 dialog::backdrop { background: rgba(0,0,0,.6); }
 #settingsDlg { max-width: min(480px, 96vw); }
+#importDlg { max-width: min(560px, 96vw); }
+.drop-zone { border: 2px dashed var(--line); border-radius: var(--radius); padding: 24px 16px; margin-bottom: 12px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; color: var(--muted); }
+.drop-zone.over, body.dragging .drop-zone { border-color: var(--accent); color: var(--text); }
+#uploadProgress { width: 100%; }
 #settingsDlg .card-form { margin: 0; }
 #fileDlg { max-width: 460px; }
 .dlg-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; }

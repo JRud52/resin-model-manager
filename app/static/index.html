@@ -25,8 +25,7 @@
   </select>
   <div class="spacer"></div>
   <div id="jobStatus" class="muted"></div>
-  <button id="scanBtn">Rescan</button>
-  <button id="importBtn" class="primary">Import library</button>
+  <button id="importBtn" class="primary">Import files</button>
   <button id="rulesBtn" class="icon" title="Corrections">✎</button>
   <button id="settingsBtn" class="icon" title="Settings">⚙</button>
 </header>
@@ -79,7 +78,7 @@
         <label>Model name <input name="model"></label>
         <label>Release <input name="release" list="releaseList"></label>
         <p class="muted small">Renaming to an existing model name in the same release merges them.
-          Changes are stored as correction rules and survive rescans; your files are never renamed.</p>
+          Changes are stored as correction rules and survive new imports; your files are never renamed.</p>
         <div class="row">
           <button type="submit" class="primary">Save</button>
           <button type="button" id="hideModelBtn">Hide model</button>
@@ -124,6 +123,35 @@
   <div class="row" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
 </dialog>
 
+<dialog id="importDlg">
+  <div class="dlg-head"><h2>Import files</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
+  <div id="dropZone" class="drop-zone">
+    <div>Drop model files, folders, or .zip / .7z archives here</div>
+    <div class="row">
+      <button id="pickFiles">Choose files</button>
+      <button id="pickFolder">Choose a folder</button>
+    </div>
+    <input id="fileInput" type="file" multiple hidden accept=".stl,.lys,.ctx,.ctb,.chitubox,.obj,.3mf,.zip,.7z">
+    <input id="folderInput" type="file" webkitdirectory hidden>
+  </div>
+  <div class="card-form">
+    <label>Put into folder (optional)
+      <input id="uploadFolder" list="releaseList" placeholder="e.g. the release name" autocomplete="off">
+    </label>
+    <p class="muted small">Archives and folders keep their own names inside it. Without a folder, each archive or folder becomes its own release.</p>
+    <div id="uploadQueue" class="muted small"></div>
+    <progress id="uploadProgress" class="hidden" max="1" value="0"></progress>
+    <div class="row">
+      <button id="uploadBtn" class="primary" disabled>Upload</button>
+      <button id="clearQueue" disabled>Clear</button>
+    </div>
+  </div>
+  <div id="sourceImport" class="hidden">
+    <p class="muted small">A NAS folder is mounted at <code id="sourceDir"></code>. You can also copy everything in it into the library; the originals are only read.</p>
+    <button id="sourceImportBtn">Copy from NAS folder</button>
+  </div>
+</dialog>
+
 <dialog id="settingsDlg">
   <form id="settingsForm" method="dialog" class="card-form">
     <h3>Settings</h3>
@@ -134,19 +162,11 @@
         <option value="2">2: Group / Creator / Release / Model / files</option>
       </select>
     </label>
-    <label>Rescan the library automatically
-      <select name="scan_interval_minutes">
-        <option value="0">Never (use Rescan)</option>
-        <option value="60">Every hour</option>
-        <option value="360">Every 6 hours</option>
-        <option value="1440">Every day</option>
-      </select>
-    </label>
     <label class="check"><input type="checkbox" name="prerender"> Render all previews in the background</label>
     <label>Background render threads <input name="preview_workers" type="number" min="1" max="8" required></label>
     <label>Preview size (pixels) <input name="preview_size" type="number" min="128" max="2048" step="64" required></label>
     <label>Skip previews for files larger than (MB) <input name="max_preview_mb" type="number" min="1" required></label>
-    <p class="muted small">Changing the folder setting rescans the library. Changing the preview size re-renders every preview.</p>
+    <p class="muted small">Changing the folder setting regroups the library. Changing the preview size re-renders every preview.</p>
     <p class="muted small" id="settingsErr"></p>
     <div class="row">
       <button value="save" class="primary">Save</button>

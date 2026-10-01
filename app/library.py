@@ -49,6 +49,7 @@ class Job:
 
 job = Job()
 _preview_wakeup = threading.Event()
+_reindex_wanted = threading.Event()
 
 
 def run_job(name: str, fn) -> bool:
@@ -64,12 +65,69 @@ def run_job(name: str, fn) -> bool:
             job.message = f"Failed: {e}"
             job.finish(traceback.format_exc())
         _preview_wakeup.set()
+        if _reindex_wanted.is_set():
+            request_reindex()
 
     threading.Thread(target=wrapper, daemon=True).start()
     return True
 
 
-# ---------------------------------------------------------------- import
+def request_reindex():
+    """Index the library now, or as soon as the running job finishes."""
+    _reindex_wanted.set()
+    if run_job("index", scan):
+        _reindex_wanted.clear()
+
+
+# ---------------------------------------------------------------- upload
+
+UPLOAD_EXTS = config.MODEL_EXTS | config.ARCHIVE_EXTS
+
+
+def upload_target(rel: str) -> Path:
+    """Validate a browser-supplied relative path and return where it goes in the library."""
+    parts = [p for p in PurePosixPath(rel.replace("\\", "/")).parts if p not in ("", ".", "/")]
+    if not parts or any(p == ".." or p.startswith(".") for p in parts):
+        raise ValueError("invalid path")
+    if os.path.splitext(parts[-1])[1].lower() not in UPLOAD_EXTS:
+        raise ValueError(f"{parts[-1]}: not a model file or .zip/.7z archive")
+    lib = config.LIBRARY_DIR.resolve()
+    target = lib.joinpath(*parts).resolve()
+    if not target.is_relative_to(lib):
+        raise ValueError("invalid path")
+    return target
+
+
+async def save_upload(rel: str, size: int, chunks) -> dict:
+    """Stream an uploaded file into the library. An identical-size file already
+    there is kept as is; a different file with the same name gets a numbered name."""
+    target = upload_target(rel)
+    if target.exists():
+        if target.stat().st_size == size:
+            async for _ in chunks:
+                pass
+            return {"status": "exists", "path": target.relative_to(config.LIBRARY_DIR.resolve()).as_posix()}
+        stem, ext, n = target.stem, target.suffix, 2
+        while target.exists():
+            target = target.with_name(f"{stem} ({n}){ext}")
+            n += 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".rmm-partial")
+    written = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in chunks:
+                f.write(chunk)
+                written += len(chunk)
+        if size >= 0 and written != size:
+            raise ValueError(f"upload incomplete ({written} of {size} bytes)")
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"status": "saved", "path": target.relative_to(config.LIBRARY_DIR.resolve()).as_posix()}
+
+
+# ---------------------------------------------------------------- import from a NAS folder
 
 def _safe_rel(p: Path, root: Path) -> str:
     return p.relative_to(root).as_posix()
@@ -405,17 +463,6 @@ def _render_pending():
         _render_rows(rows)
 
 
-def scheduler():
-    """Rescan every `scan_interval_minutes` (0 = off); rereads the setting each minute."""
-    last = time.monotonic()
-    while True:
-        time.sleep(60)
-        minutes = settings.get("scan_interval_minutes")
-        if minutes > 0 and time.monotonic() - last >= minutes * 60:
-            last = time.monotonic()
-            run_job("scan", scan)
-
-
 def apply_settings_change(changed: dict):
     """Catch the library up after settings were changed in the app."""
     c = db.conn()
@@ -426,5 +473,5 @@ def apply_settings_change(changed: dict):
                   "WHERE preview='error' AND preview_error LIKE 'larger than%'")
     c.commit()
     if "release_depth" in changed:
-        run_job("scan", scan)
+        request_reindex()
     _preview_wakeup.set()
