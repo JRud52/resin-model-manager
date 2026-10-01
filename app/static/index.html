@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resin Model Manager</title>
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <button id="menuBtn" class="icon" title="Releases">☰</button>
+  <h1>Resin Models</h1>
+  <input id="search" type="search" placeholder="Search models, releases, files…">
+  <select id="supFilter" title="Filter by support">
+    <option value="">All</option>
+    <option value="yes">Has supported</option>
+    <option value="no">Has unsupported</option>
+    <option value="unknown">Support unknown</option>
+  </select>
+  <div class="spacer"></div>
+  <div id="jobStatus" class="muted"></div>
+  <button id="scanBtn">Rescan</button>
+  <button id="importBtn" class="primary">Import library</button>
+  <button id="rulesBtn" class="icon" title="Corrections">⚙</button>
+</header>
+<div id="layout">
+  <aside id="sidebar">
+    <div class="side-title">Releases</div>
+    <ul id="releases"></ul>
+    <div class="side-title">Tags</div>
+    <ul id="tagList"></ul>
+  </aside>
+  <main>
+    <div class="crumb-row">
+      <div id="crumbs"></div>
+      <div id="activeTags" class="badges"></div>
+      <div class="spacer"></div>
+      <button id="releaseTagBtn" class="hidden">Tag all models in this release</button>
+    </div>
+    <div id="empty" class="empty hidden"></div>
+    <div id="grid"></div>
+    <button id="more" class="hidden">Load more</button>
+  </main>
+</div>
+
+<dialog id="modelDlg">
+  <div class="dlg-head">
+    <div>
+      <div class="muted" id="mRelease"></div>
+      <h2 id="mName"></h2>
+      <div class="tag-editor">
+        <span id="mTags" class="badges"></span>
+        <input id="mTagInput" list="tagOptions" placeholder="+ add tag" autocomplete="off">
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <button id="mEditBtn">Edit</button>
+    <button class="icon" data-close>✕</button>
+  </div>
+  <div class="dlg-body">
+    <div class="viewer">
+      <div id="viewer3d"></div>
+      <img id="mPreview" alt="">
+      <div class="viewer-bar">
+        <span id="mPreviewName" class="muted"></span>
+        <div class="spacer"></div>
+        <button id="view3dBtn">Rotate in 3D</button>
+      </div>
+    </div>
+    <div class="files">
+      <form id="editForm" class="hidden card-form">
+        <label>Model name <input name="model"></label>
+        <label>Release <input name="release" list="releaseList"></label>
+        <p class="muted small">Renaming to an existing model name in the same release merges them.
+          Changes are stored as correction rules and survive rescans; your files are never renamed.</p>
+        <div class="row">
+          <button type="submit" class="primary">Save</button>
+          <button type="button" id="hideModelBtn">Hide model</button>
+          <button type="button" id="cancelEdit">Cancel</button>
+        </div>
+      </form>
+      <div id="mFiles"></div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="fileDlg">
+  <form id="fileForm" class="card-form" method="dialog">
+    <h3 id="fName"></h3>
+    <div class="muted small" id="fPath"></div>
+    <label>Support
+      <select name="supported">
+        <option value="">(keep)</option>
+        <option value="1">Supported</option>
+        <option value="0">Unsupported</option>
+        <option value="-1">Unknown</option>
+      </select>
+    </label>
+    <label>Move to model <input name="model" list="modelList" placeholder="(keep)"></label>
+    <label>Release <input name="release" list="releaseList" placeholder="(keep)"></label>
+    <label>Option group <input name="option" placeholder="(keep), e.g. Heads"></label>
+    <label>Apply to
+      <select name="scope"></select>
+    </label>
+    <div class="row">
+      <button value="save" class="primary">Save</button>
+      <button value="hide" id="hideFileBtn">Hide</button>
+      <button value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="rulesDlg">
+  <div class="dlg-head"><h2>Corrections</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
+  <p class="muted small">Each rule applies to every file whose path starts with the folder shown. Delete a rule to go back to the automatic guess.</p>
+  <table id="rulesTable"></table>
+  <div class="row" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
+</dialog>
+
+<dialog id="releaseTagDlg">
+  <form method="dialog" class="card-form">
+    <h3>Tag every model in <span id="rtRelease"></span></h3>
+    <label>Tags (comma separated) <input name="tags" list="tagOptions" autocomplete="off" required></label>
+    <p class="muted small" id="rtCount"></p>
+    <div class="row">
+      <button value="add" class="primary">Add to all</button>
+      <button value="remove">Remove from all</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<datalist id="releaseList"></datalist>
+<datalist id="tagOptions"></datalist>
+<datalist id="modelList"></datalist>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

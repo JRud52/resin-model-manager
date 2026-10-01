@@ -1,0 +1,24 @@
+services:
+  resin-models:
+    build:
+      context: .
+      args:
+        PUID: 1000   # `id -u` of your NAS user
+        PGID: 1000   # `id -g` of your NAS user
+    container_name: resin-models
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      RELEASE_DEPTH: "0"          # 1 if your library is Creator/Release/...
+      PREVIEW_WORKERS: "1"        # background render threads
+      PRERENDER: "1"              # render every STL in the background
+      SCAN_INTERVAL_MINUTES: "0"  # e.g. 60 to pick up new files hourly
+      MAX_PREVIEW_MB: "1024"
+    volumes:
+      # Your existing library. Read-only: the app can never change these files.
+      - /volume1/3d-models:/source:ro
+      # Where the imported copy lives (must be a different folder).
+      - /volume1/resin-manager/library:/library
+      # Database and cached preview images.
+      - /volume1/resin-manager/data:/data
