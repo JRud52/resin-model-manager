@@ -304,7 +304,7 @@ function countBy(files, key) {
   for (const f of files) n.set(key(f), (n.get(key(f)) || 0) + 1);
   return n;
 }
-// Files with no supported/unsupported marker show in both versions.
+// Files marked "support unknown" in their correction show in both versions.
 const supKey = (f) => (f.supported === true ? "supported" : f.supported === false ? "unsupported" : "");
 const inVersion = (f, v) => v === "all" || supKey(f) === "" || supKey(f) === v;
 

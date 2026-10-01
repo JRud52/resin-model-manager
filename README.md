@@ -31,8 +31,9 @@ groups them by **release** and **model**, separates **supported** and
   are grouped by their shared name prefix (`Orc_Warboss_Body.stl` +
   `Orc_Warboss_Axe.stl` → *Orc Warboss*).
 * **Supported / unsupported** comes from folder and file names (`supported`,
-  `presupported`, `pre-supp`, `_sup`, `unsupported`, `no supports`, ...). An
-  unmarked STL sitting next to `<same name>_supported` counts as unsupported.
+  `presupported`, `pre-supp`, `_sup`, `unsupported`, `no supports`, ...). A
+  file with no supported marker in its name or any parent folder counts as
+  unsupported.
 * **Corrections.** The guesses will sometimes be wrong. *Edit* on a model renames
   it or moves it to another release (renaming onto an existing model merges
   them); ✎ on a file changes its support flag, model, release or option group,
