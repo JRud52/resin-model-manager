@@ -281,16 +281,83 @@ $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
 
 const supLabel = (s) => (s === true ? "Supported" : s === false ? "Unsupported" : "Other files");
 
+// Which files the model window shows: one format and one version at a time,
+// starting from the preferences in Settings. Switching here is per view only.
+const FORMAT_ORDER = ["stl", "lys", "ctx", "ctb", "chitubox", "3mf", "obj"];
+const fmtOf = (f) => f.ext.replace(/^\./, "").toLowerCase();
+let prefs = { preferred_format: "stl", preferred_support: "supported" };
+const loadPrefs = async () => { try { prefs = await api("/api/settings"); } catch {} };
+
+function countBy(files, key) {
+  const n = new Map();
+  for (const f of files) n.set(key(f), (n.get(key(f)) || 0) + 1);
+  return n;
+}
+// Files with no supported/unsupported marker show in both versions.
+const supKey = (f) => (f.supported === true ? "supported" : f.supported === false ? "unsupported" : "");
+const inVersion = (f, v) => v === "all" || supKey(f) === "" || supKey(f) === v;
+
+function pickFormat(formats, wanted) {
+  if (formats.size < 2) return "all";
+  if (wanted === "all" || formats.has(wanted)) return wanted;
+  if (wanted === "") return "all";
+  return FORMAT_ORDER.find((x) => formats.has(x)) || [...formats.keys()].sort()[0];
+}
+function pickVersion(sups, wanted) {
+  if (!sups.has("supported") || !sups.has("unsupported")) return "all";
+  return wanted || "all";
+}
+
+function viewFiles() {
+  const m = state.model, v = state.view;
+  // v holds what was asked for; fmt / sup are what this model can actually show.
+  const formats = countBy(m.files, fmtOf);
+  const fmt = pickFormat(formats, v.fmt);
+  const inFmt = m.files.filter((f) => fmt === "all" || fmtOf(f) === fmt);
+  const sups = countBy(inFmt, supKey);
+  const sup = pickVersion(sups, v.sup);
+  return { formats, sups, fmt, sup, files: inFmt.filter((f) => inVersion(f, sup)) };
+}
+
+function renderFilter(formats, sups, v) {
+  const btn = (kind, val, label, n) =>
+    `<button type="button" data-${kind}="${val}" class="${v[kind] === val ? "on" : ""}">${label}${n != null ? `<span class="muted">${n}</span>` : ""}</button>`;
+  let html = "";
+  if (formats.size > 1) {
+    const keys = [...formats.keys()].sort((a, b) =>
+      (FORMAT_ORDER.indexOf(a) + 1 || 99) - (FORMAT_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+    html += `<div class="seg">${keys.map((k) => btn("fmt", k, esc(k.toUpperCase()), formats.get(k))).join("")}${btn("fmt", "all", "All formats")}</div>`;
+  }
+  if (sups.has("supported") && sups.has("unsupported")) {
+    html += `<div class="seg">${btn("sup", "supported", "Supported", sups.get("supported"))}${btn("sup", "unsupported", "Unsupported", sups.get("unsupported"))}${btn("sup", "all", "Both")}</div>`;
+  }
+  $("#mFilter").innerHTML = html;
+}
+
 async function openModel(id) {
   const m = await api(`/api/models/${id}`);
+  const same = state.model && state.model.id === id && $("#modelDlg").open;
   state.model = m;
+  if (!same) state.view = { fmt: prefs.preferred_format, sup: prefs.preferred_support };
   $("#mName").textContent = m.model;
   $("#mRelease").textContent = (m.creator ? m.creator + " / " : "") + m.release;
   $("#editForm").classList.add("hidden");
   $("#mTagInput").value = "";
   renderModelTags();
+  const shown = renderFiles();
+  if (same && state.current && shown.some((f) => f.id === state.current.id)) showFile(state.current);
+  else if (m.images.length) showImage(m.images[0]);
+  else showFile(shown.find((f) => f.id === m.cover) || shown[0] || m.files[0]);
+  const dlg = $("#modelDlg");
+  if (!dlg.open) dlg.showModal();
+}
+
+function renderFiles() {
+  const m = state.model;
+  const { formats, sups, fmt, sup, files } = viewFiles();
+  renderFilter(formats, sups, { fmt, sup });
   const groups = new Map();
-  for (const f of m.files) {
+  for (const f of files) {
     const key = `${f.option || ""}\u0000${supLabel(f.supported)}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(f);
@@ -320,10 +387,23 @@ async function openModel(id) {
         <button data-edit="${f.id}" title="Correct this file">✎</button>
       </div>`).join("");
   }).join("");
-  if (m.images.length) showImage(m.images[0]);
-  else showFile(m.files.find((f) => f.id === m.cover) || m.files[0]);
-  const dlg = $("#modelDlg");
-  if (!dlg.open) dlg.showModal();
+  markActive();
+  return files;
+}
+
+$("#mFilter").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.fmt) state.view.fmt = b.dataset.fmt;
+  if (b.dataset.sup) state.view.sup = b.dataset.sup;
+  const shown = renderFiles();
+  // Keep what's in the viewer unless that file was just filtered out.
+  if (state.current && !shown.some((f) => f.id === state.current.id) && shown.length) showFile(shown[0]);
+});
+
+function markActive() {
+  document.querySelectorAll("#mFiles .file").forEach((el) => el.classList.toggle("active", el.dataset.id
+    ? state.current?.id === +el.dataset.id : state.currentImage?.id === +el.dataset.img));
 }
 
 function showFile(f) {
@@ -331,26 +411,28 @@ function showFile(f) {
   stop3d();
   $(".viewer").classList.remove("three");
   state.current = f;
+  state.currentImage = null;
   const img = $("#mPreview");
   img.style.visibility = "visible";
   img.src = `/api/files/${f.id}/preview`;
   img.onerror = () => { img.style.visibility = "hidden"; };
   $("#mPreviewName").textContent = f.name;
   $("#view3dBtn").disabled = f.ext !== ".stl";
-  document.querySelectorAll(".file").forEach((el) => el.classList.toggle("active", +el.dataset.id === f.id));
+  markActive();
 }
 
 function showImage(i) {
   stop3d();
   $(".viewer").classList.remove("three");
   state.current = null;
+  state.currentImage = i;
   const img = $("#mPreview");
   img.style.visibility = "visible";
   img.src = `/api/images/${i.id}/full`;
   img.onerror = () => { img.style.visibility = "hidden"; };
   $("#mPreviewName").textContent = i.name;
   $("#view3dBtn").disabled = true;
-  document.querySelectorAll(".file").forEach((el) => el.classList.toggle("active", +el.dataset.img === i.id));
+  markActive();
 }
 
 $("#mFiles").addEventListener("click", (e) => {
@@ -517,6 +599,8 @@ $("#settingsBtn").onclick = async () => {
   f.preview_workers.value = s.preview_workers;
   f.preview_size.value = s.preview_size;
   f.max_preview_mb.value = s.max_preview_mb;
+  f.preferred_format.value = s.preferred_format;
+  f.preferred_support.value = s.preferred_support;
   $("#settingsErr").textContent = "";
   $("#settingsDlg").showModal();
 };
@@ -524,10 +608,10 @@ $("#settingsForm").addEventListener("submit", async (e) => {
   if (e.submitter?.value !== "save") return;
   e.preventDefault();
   const f = e.target;
-  const body = { prerender: f.prerender.checked ? 1 : 0 };
+  const body = { prerender: f.prerender.checked ? 1 : 0, preferred_format: f.preferred_format.value, preferred_support: f.preferred_support.value };
   for (const k of ["release_depth", "preview_workers", "preview_size", "max_preview_mb"]) body[k] = Number(f[k].value);
   try {
-    await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+    prefs = await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
     $("#settingsDlg").close();
     wasRunning = true;
   } catch (err) { $("#settingsErr").textContent = err.message; }
@@ -664,5 +748,6 @@ $("#sourceImportBtn").onclick = async () => {
   try { await api("/api/import", { method: "POST" }); wasRunning = true; } catch (e) { alert(e.message); }
 };
 
+loadPrefs();
 refresh();
 pollStatus();

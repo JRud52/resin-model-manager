@@ -223,6 +223,23 @@ models = {(m["release"], m["model"]): m for m in get("/api/models")["items"]}
 assert models[("Mech Pack", "Walker")]["creator"] == "Tank Works" and ("Dragon Lords", "Red Dragon") in models
 print("layouts ok")
 
+# Preferred format / version: text settings, defaulting to STL + supported.
+def put_settings(body):
+    req = urllib.request.Request(f"{BASE}/api/settings", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="PUT")
+    return json.load(urllib.request.urlopen(req))
+s = get("/api/settings")
+assert s["preferred_format"] == "stl" and s["preferred_support"] == "supported", s
+s = put_settings({"preferred_format": "lys", "preferred_support": ""})
+assert s["preferred_format"] == "lys" and s["preferred_support"] == "" and s["release_depth"] == 0, s
+try:
+    put_settings({"preferred_format": "exe"})
+    raise SystemExit("bad format accepted")
+except urllib.error.HTTPError as e:
+    assert e.code == 400
+put_settings({"preferred_format": "stl", "preferred_support": "supported"})
+print("preferences ok")
+
 for _ in range(120):
     pv = get("/api/status")["previews"]
     if not pv.get("pending"):
