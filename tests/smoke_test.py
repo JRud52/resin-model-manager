@@ -300,6 +300,31 @@ assert sorted(items) == ["Knight", "Red Dragon"] and "knightly" in items["Knight
 assert get("/api/combines") == []
 print("combining models ok")
 
+# Bulk edit: tags, release, creator and support for several models at once.
+sr = {m["model"]: m for m in get("/api/models?release=Space%20Rats")["items"]}
+assert sorted(sr) == ["Rat Commander", "Rat Trooper"], sr
+r = post("/api/models/bulk", {"model_ids": [m["id"] for m in sr.values()], "add_tags": ["rats"], "remove_tags": ["painted"],
+                              "release": "Rodents", "creator": "Rat Co", "supported": 1})
+assert r["releases"] == ["Rodents"], r
+rod = {m["model"]: m for m in get("/api/models?release=Rodents")["items"]}
+assert sorted(rod) == ["Rat Commander", "Rat Trooper"] and get("/api/models?release=Space%20Rats")["items"] == []
+assert all(m["tags"] == ["rats", "Sci-fi"] or m["tags"] == ["rats"] for m in rod.values()), rod
+assert all(m["creator"] == "Rat Co" and not m["unsupported_files"] for m in rod.values()), rod
+post("/api/models/bulk", {"model_ids": [rod["Rat Trooper"]["id"]], "hidden": 1})
+assert [m["model"] for m in get("/api/models?release=Rodents")["items"]] == ["Rat Commander"]
+# A combined model moved in bulk keeps its option groups.
+dl_ids = [m["id"] for m in get(dl)["items"]]
+cb = post("/api/combines", {"release": "Dragon Lords", "name": "Dragon Rider", "model_ids": dl_ids})
+post("/api/models/bulk", {"model_ids": [cb["id"]], "release": "Dragon Riders"})
+moved = get("/api/models?release=Dragon%20Riders")["items"]
+assert [(m["model"], m["options"]) for m in moved] == [("Dragon Rider", 2)], moved
+try:
+    post("/api/models/bulk", {"model_ids": []})
+    raise SystemExit("empty bulk edit accepted")
+except urllib.error.HTTPError as e:
+    assert e.code == 400
+print("bulk edit ok")
+
 # Folder mappings: say which folder levels are release / model for a whole folder, with a preview,
 # tags following the regrouped models, and removal going back to the automatic guess.
 ef = "/api/models?release=Explorers%20Fellowship"

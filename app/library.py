@@ -622,6 +622,48 @@ def update_combine(combine_id: int, name: str, release: str) -> bool:
     return True
 
 
+_OVERRIDE_FIELDS = ("release", "model", "option", "creator", "supported", "hidden")
+
+
+def add_overrides(prefixes: list[str], vals: dict):
+    """Save correction rules (without reclassifying); None fields keep what a rule already says."""
+    c = db.conn()
+    vals = {k: vals.get(k) for k in _OVERRIDE_FIELDS}
+    for prefix in prefixes:
+        existing = c.execute("SELECT * FROM overrides WHERE prefix=?", (prefix,)).fetchone()
+        if existing:
+            merged = {k: (vals[k] if vals[k] is not None else existing[k]) for k in vals}
+            c.execute("UPDATE overrides SET release=?, model=?, option=?, creator=?, supported=?, hidden=? WHERE id=?",
+                      (*merged.values(), existing["id"]))
+        else:
+            c.execute("INSERT INTO overrides(prefix, release, model, option, creator, supported, hidden) "
+                      "VALUES (?,?,?,?,?,?,?)", (prefix, *vals.values()))
+    c.commit()
+
+
+def bulk_edit(model_ids: list[str], release: str | None = None, supported: int | None = None,
+              hidden: int | None = None) -> list[str]:
+    """Move several models to a release, set their support or hide them, as correction rules
+    on their folders. Tags and combines move with them. Returns the releases they end up in."""
+    c = db.conn()
+    rows = list(_ids_in_chunks("SELECT id, model_id, model_root, release, model FROM files WHERE model_id IN (%s)",
+                               model_ids))
+    if not rows:
+        return []
+    before = {r["id"]: r["model_id"] for r in rows}
+    if release is not None or supported is not None or hidden is not None:
+        add_overrides(sorted({r["model_root"] for r in rows}),
+                      {"release": release, "supported": supported, "hidden": hidden})
+        if release is not None:  # a combined model keeps its option groups in the new release
+            for rel, model in {(r["release"], r["model"]) for r in rows}:
+                cb = combine_for(rel, model)
+                if cb:
+                    c.execute("UPDATE model_combines SET release=? WHERE id=?", (release, cb["id"]))
+            c.commit()
+        _regroup(before)
+    return [release] if release is not None else sorted({r["release"] for r in rows})
+
+
 def split_combine(combine_id: int) -> bool:
     """Undo a combine: its parts are separate models again (tags are copied back to them)."""
     c = db.conn()
