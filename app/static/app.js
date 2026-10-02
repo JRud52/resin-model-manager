@@ -291,7 +291,7 @@ function showMmf(missing) {
 }
 
 function mmfCard(m) {
-  const b = [m.local ? `<span class="badge sup">in your library</span>` : `<span class="badge unsup">not downloaded</span>`];
+  const b = [m.local ? `<span class="badge sup">in your library</span>` : m.queued ? `<span class="badge tag">waiting to download</span>` : `<span class="badge unsup">not downloaded</span>`];
   [...new Set(m.sources.map((s) => s.source))].forEach((s) => b.push(`<span class="badge">${MMF_SOURCES[s] || esc(s)}</span>`));
   const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))].join(", ");
   const img = m.image ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(m.image)}" alt="${esc(m.name)}" class="photo"
@@ -344,12 +344,70 @@ $("#mmfStrip").addEventListener("click", (e) => {
   if (b) openMmfItem($("#mmfStrip").items.find((m) => String(m.id) === b.dataset.mmfItem));
 });
 
-function openMmfItem(m) {
-  if (!m) return;
-  if (!m.local) { window.open(m.url, "_blank", "noopener"); return; }
-  if (m.local.model_id) { openModel(m.local.model_id); return; }
-  Object.assign(state, { source: null, release: m.local.release, creator: null, tags: [] });
-  refresh();
+function openMmfItem(m) { if (m) openMmfModel(m.id); }
+
+// MyMiniFactory items open in the model window too: their pictures, where they
+// come from, and Download to library (done by the bookmarklet on its next run).
+async function openMmfModel(id) {
+  const m = await api(`/api/mmf/${id}`);
+  state.mmfItem = m;
+  state.model = null;
+  stop3d();
+  const dlg = $("#modelDlg");
+  dlg.classList.add("mmf-mode");
+  const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))];
+  $("#mName").textContent = m.name;
+  $("#mRelease").textContent = [m.creator, ...where].filter(Boolean).join(" / ") + " · MyMiniFactory";
+  $("#editForm").classList.add("hidden");
+  $("#mFilter").innerHTML = "";
+  renderMmfModel();
+  if (m.images.length) showMmfPicture(0); else { $("#mPreview").style.visibility = "hidden"; $("#mPreviewName").textContent = "No pictures"; }
+  if (!dlg.open) dlg.showModal();
+}
+
+function renderMmfModel() {
+  const m = state.mmfItem;
+  const kinds = [...new Set(m.sources.map((s) => MMF_SOURCES[s.source] || s.source))];
+  const dl = m.local
+    ? `<p class="small">This is in your library${m.local.release ? ` as <b>${esc(m.local.release)}</b>` : ""}.</p>
+       <div class="row"><button id="mmfOpenLocal" class="primary">Open in your library</button>
+       <button id="mmfDownload">Download again</button></div>`
+    : m.queued
+      ? `<p class="small"><b>Waiting to download.</b> Go to myminifactory.com and click your <b>Sync to Resin Models</b> bookmark;
+         it downloads everything waiting into your library.</p>
+         <div class="row"><a class="button-like" href="https://www.myminifactory.com/library" target="_blank" rel="noopener">Open MyMiniFactory ↗</a>
+         <button id="mmfCancel">Don't download</button></div>`
+      : `<div class="row"><button id="mmfDownload" class="primary">Download to library</button></div>`;
+  const note = m.download_note ? `<p class="small err">Last download failed: ${esc(m.download_note)}. You can also download it on MyMiniFactory and drop the file into <b>Import files</b>.</p>` : "";
+  $("#mFiles").innerHTML = `<div class="mmf-info">
+      <div class="badges">${kinds.map((k) => `<span class="badge">${esc(k)}</span>`).join("")}
+        <a class="badge link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Open on MyMiniFactory ↗</a></div>
+      ${dl}${note}
+    </div>
+    <div class="group-title">Pictures (${m.images.length})</div>
+    <div class="mmf-pics">${m.images.map((u, i) => `<button data-mmf-pic="${i}" title="Picture ${i + 1}">
+      <img loading="lazy" referrerpolicy="no-referrer" src="${esc(u)}" alt="" onerror="this.parentElement.remove()"></button>`).join("")}</div>`;
+  markMmfPic();
+}
+
+function showMmfPicture(i) {
+  state.mmfPic = i;
+  const img = $("#mPreview");
+  img.referrerPolicy = "no-referrer";
+  img.style.visibility = "visible";
+  img.src = state.mmfItem.images[i];
+  img.onerror = () => { img.style.visibility = "hidden"; };
+  $("#mPreviewName").textContent = `Picture ${i + 1} of ${state.mmfItem.images.length}`;
+  markMmfPic();
+}
+function markMmfPic() {
+  document.querySelectorAll("#mFiles [data-mmf-pic]").forEach((b) => b.classList.toggle("active", +b.dataset.mmfPic === state.mmfPic));
+}
+
+async function setMmfQueued(queued) {
+  state.mmfItem = { ...state.mmfItem, ...(await api(`/api/mmf/${state.mmfItem.id}/queue`, { method: "POST", body: JSON.stringify({ queued }) })) };
+  renderMmfModel();
+  state.dirty = true;
 }
 
 async function mmfBookmarklet() {
@@ -362,7 +420,8 @@ function renderMmfInfo() {
   const when = s.synced ? new Date(s.synced * 1000).toLocaleString() : null;
   const parts = Object.entries(s.sources || {}).map(([k, n]) => `${n} ${(MMF_SOURCES[k] || k).toLowerCase()}`);
   $("#mmfInfo").textContent = when
-    ? `Last synced ${when}: ${s.total} items (${parts.join(", ")}), ${s.missing} not in your library.`
+    ? `Last synced ${when}: ${s.total} items (${parts.join(", ")}), ${s.missing} not in your library` +
+      (s.queued ? `, ${s.queued} waiting to download (click the bookmark on myminifactory.com).` : ".")
     : "Not synced yet.";
   $("#mmfClear").disabled = !s.total;
 }
@@ -600,6 +659,9 @@ function renderFilter(formats, sups, v) {
 
 async function openModel(id) {
   const m = await api(`/api/models/${id}`);
+  $("#modelDlg").classList.remove("mmf-mode");
+  state.mmfItem = null;
+  $("#mPreview").referrerPolicy = "";
   const same = state.model && state.model.id === id && $("#modelDlg").open;
   state.model = m;
   if (!same) state.view = { fmt: prefs.preferred_format, sup: prefs.preferred_support };
@@ -702,6 +764,18 @@ function showImage(i) {
 
 $("#mFiles").addEventListener("click", (e) => {
   if (e.target.closest("a")) return;
+  if (state.mmfItem && $("#modelDlg").classList.contains("mmf-mode")) {
+    const pic = e.target.closest("[data-mmf-pic]");
+    if (pic) showMmfPicture(+pic.dataset.mmfPic);
+    if (e.target.closest("#mmfDownload")) setMmfQueued(true);
+    if (e.target.closest("#mmfCancel")) setMmfQueued(false);
+    if (e.target.closest("#mmfOpenLocal")) {
+      const local = state.mmfItem.local;
+      if (local.model_id) openModel(local.model_id);
+      else { $("#modelDlg").close(); Object.assign(state, { source: null, release: local.release, creator: null, tags: [] }); refresh(); }
+    }
+    return;
+  }
   const edit = e.target.closest("[data-edit]");
   if (edit) { openFileEdit(state.model.files.find((f) => f.id === +edit.dataset.edit)); return; }
   const picEdit = e.target.closest("[data-pic-edit]");
