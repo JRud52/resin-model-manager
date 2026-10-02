@@ -103,10 +103,10 @@ groups them by **release** and **model**, separates **supported** and
   `preview` are picked first. If an image lands in the wrong place, open it and
   pick the model it belongs to (or *Whole release*) under *Belongs to*; this is
   saved as a correction rule.
-  To choose the release's main image, click ☆ next to any image in a model's
-  image list; it is shown first, larger, above the release's models. *Main for
-  model* in an image's full-size view does the same for that model's card. Both
-  choices are kept across re-indexing.
+  In a model's image list, ☆ makes an image the model's main image (shown on
+  its card and first in its window), and *Release* makes it the release's main
+  image (shown first, larger, above the release's models). Click again to undo.
+  Both choices are kept across re-indexing.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
 * **Your MyMiniFactory library.** MyMiniFactory has no API for a user's

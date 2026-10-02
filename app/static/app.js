@@ -723,7 +723,8 @@ function renderFiles() {
         <div class="fname"><div title="${esc(i.path)}">${esc(i.name)}</div>
           <div class="muted small">${i.scope === "release" ? "Release image" : "Model image"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
         <a href="/api/images/${i.id}/full" target="_blank" rel="noopener" title="Open full size">↗</a>
-        <button data-pic-main="${i.id}" class="star ${i.main_release ? "on" : ""}" title="${i.main_release ? "Main image of the release (click to unset)" : "Use as the release's main image"}">${i.main_release ? "★" : "☆"}</button>
+        <button data-pic-main="${i.id}" class="star ${i.main_model ? "on" : ""}" title="${i.main_model ? "Main image of this model (click to unset)" : "Use as this model's main image"}">${i.main_model ? "★" : "☆"}</button>
+        <button data-pic-rel="${i.id}" class="relmain ${i.main_release ? "on" : ""}" title="${i.main_release ? "Main image of the release (click to unset)" : "Use as the release's main image"}">Release</button>
         <button data-pic-edit="${i.id}" title="Choose which model this image belongs to, or make it the main image">✎</button>
       </div>`).join("") + `</details>` : "";
   $("#mFiles").innerHTML = pics + keys.map((k) => {
@@ -802,10 +803,13 @@ $("#mFiles").addEventListener("click", (e) => {
   }
   const edit = e.target.closest("[data-edit]");
   if (edit) { openFileEdit(state.model.files.find((f) => f.id === +edit.dataset.edit)); return; }
-  const picMain = e.target.closest("[data-pic-main]");
+  // ☆ picks the model's main image (its card and the first image here); "Release" picks the release's.
+  const picMain = e.target.closest("[data-pic-main], [data-pic-rel]");
   if (picMain) {
-    const pic = state.model.images.find((i) => i.id === +picMain.dataset.picMain);
-    setMainPicture("release", pic, !pic.main_release).then(() => { const d = $(".pics"); if (d) d.open = true; });
+    const forModel = picMain.hasAttribute("data-pic-main");
+    const pic = state.model.images.find((i) => i.id === +(picMain.dataset.picMain || picMain.dataset.picRel));
+    const on = forModel ? !pic.main_model : !pic.main_release;
+    setMainPicture(forModel ? "model" : "release", pic, on).then(() => { const d = $(".pics"); if (d) d.open = true; });
     return;
   }
   const picEdit = e.target.closest("[data-pic-edit]");
