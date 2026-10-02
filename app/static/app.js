@@ -1,7 +1,11 @@
 const $ = (s, el = document) => el.querySelector(s);
 const api = async (url, opts = {}) => {
   const r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opts });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail;
+    // FastAPI sends a list of {loc, msg} when the request itself doesn't fit the endpoint.
+    throw new Error(Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ") : detail || r.statusText);
+  }
   return r.json();
 };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -253,7 +257,7 @@ $("#combineDlg form").addEventListener("submit", async (e) => {
   const form = e.target;
   try {
     const res = await api("/api/combines", { method: "POST", body: JSON.stringify({
-      release: [...pickedReleases()][0], name: form.name.value, model_ids: [...state.picked] }) });
+      release: [...pickedReleases()][0], name: form.name.value, model_ids: [...state.picked.keys()] }) });
     $("#combineDlg").close();
     endPicking();
     await refresh();
