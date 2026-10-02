@@ -589,6 +589,45 @@ def mmf_import(payload: dict):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/mmf/queue")
+def mmf_queue():
+    """What the bookmarklet should download on this run (asked for by the sync window)."""
+    return mmf.queue()
+
+
+@app.get("/api/mmf/{oid}")
+def mmf_item(oid: int):
+    d = mmf.item(oid)
+    if not d:
+        raise HTTPException(404)
+    return d
+
+
+class MmfQueueIn(BaseModel):
+    queued: bool = True
+
+
+@app.post("/api/mmf/{oid}/queue")
+def mmf_set_queued(oid: int, body: MmfQueueIn):
+    """Mark an item to be downloaded into the library the next time the bookmarklet runs."""
+    if not mmf.set_queued(oid, body.queued):
+        raise HTTPException(404)
+    return mmf.item(oid)
+
+
+class MmfResultIn(BaseModel):
+    ok: bool
+    note: str = ""
+
+
+@app.post("/api/mmf/{oid}/downloaded")
+def mmf_downloaded(oid: int, body: MmfResultIn):
+    mmf.download_result(oid, body.ok, body.note)
+    if body.ok:
+        library.request_reindex()
+    return {"ok": True}
+
+
 @app.delete("/api/mmf")
 def mmf_clear():
     mmf.clear()

@@ -21,7 +21,9 @@ def obj(i, name, creator="Dragon Forge", **extra):
             "images": {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/{i}.png"}}]}, **extra}
 
 
-PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
+WYRM_PICS = {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/2.png"}}, {"large": {"url": f"{CDN}/7.png"}},
+                       {"standard": {"url": f"{CDN}/8.png"}}]}
+PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS, archive_download_url="/download/2"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
 PLEDGES = [obj(4, "Siege Tower", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
 TRIBE = [obj(5, "Goblin Boss", creator="Greenskins"), obj(6, "Goblin Shaman", creator="Greenskins")]
 
@@ -30,6 +32,17 @@ def png(i):
     from PIL import Image
     b = BytesIO()
     Image.new("RGB", (64, 64), ((i * 70) % 256, 120, 200 - i * 25)).save(b, "PNG")
+    return b.getvalue()
+
+
+def wyrm_zip():
+    import io
+    import zipfile
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("Wyrm_supported.stl", "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\n"
+                   "vertex 0 10 0\nendloop\nendfacet\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 0 10 0\n"
+                   "vertex 0 0 10\nendloop\nendfacet\nendsolid t\n")
     return b.getvalue()
 
 
@@ -49,6 +62,11 @@ def fake_mmf(route):
                          "groups": {"items": [{"id": "all/9", "name": "All"}, {"id": "42", "name": "March"}]}}], page)
     elif "/data-library/group/42" in url:
         body = page_of(TRIBE, page)
+    elif url.endswith("/download/2"):
+        return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
+                             headers={"Content-Disposition": 'attachment; filename="Ancient_Wyrm.zip"'})
+    elif "/download/" in url:  # what the real site does when a download isn't allowed
+        return route.fulfill(status=200, content_type="text/html", body="<html>Log in</html>")
     elif "/data-library/" in url:
         return route.fulfill(status=404, body="{}")
     else:
@@ -114,6 +132,45 @@ with sync_playwright() as p:
     app.wait_for_function("[...document.querySelectorAll('#grid img')].every((i) => i.complete && i.naturalWidth)")
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-grid.png")
+
+    # MyMiniFactory items open in the model window with all their pictures.
+    app.click("#grid .card.mmf[data-mmf='2']")
+    app.wait_for_selector("#modelDlg.mmf-mode[open]")
+    assert app.locator("#mFiles [data-mmf-pic]").count() == 3
+    assert app.locator("#mEditBtn").is_hidden() and app.locator("#mMapBtn").is_hidden()
+    app.wait_for_function("document.getElementById('mPreview').naturalWidth > 0")
+    if SHOTS:
+        app.screenshot(path=f"{SHOTS}/mmf-modal.png")
+    app.click("#mmfDownload")
+    app.wait_for_selector("#mFiles >> text=Waiting to download")
+    if SHOTS:
+        app.screenshot(path=f"{SHOTS}/mmf-modal-queued.png")
+    app.keyboard.press("Escape")
+    post = lambda u, b: urllib.request.urlopen(urllib.request.Request(
+        BASE + u, data=json.dumps(b).encode(), headers={"Content-Type": "application/json"}, method="POST"))
+    post("/api/mmf/4/queue", {"queued": True})
+    assert [q["id"] for q in get("/api/mmf/queue")] == [2, 4]
+    assert get("/api/mmf/queue")[0]["folder"] == "Dragon Forge/Ancient Wyrm"
+
+    # The next bookmarklet run downloads them with the MyMiniFactory login and uploads them.
+    popup.close()
+    with ctx.expect_page() as popup_info:
+        mmf.evaluate(urllib.request.unquote(href[len("javascript:"):]))
+    popup = popup_info.value
+    popup.wait_for_function("document.getElementById('msg').textContent.includes('Downloaded')", timeout=30000)
+    print("download sync:", popup.text_content("#msg"))
+    for _ in range(60):
+        if get("/api/models?q=wyrm")["total"] and not get("/api/status")["job"]["running"]:
+            break
+        time.sleep(0.5)
+    wyrm = get("/api/models?q=wyrm")["items"]
+    assert wyrm and wyrm[0]["release"] == "Ancient Wyrm" and wyrm[0]["creator"] == "Dragon Forge", wyrm
+    item = get("/api/mmf/2")
+    assert item["local"] and not item["queued"] and not item["download_note"], item
+    tower = get("/api/mmf/4")
+    assert tower["queued"] and "web page" in tower["download_note"], tower
+    assert get("/api/mmf/status")["queued"] == 1
+    post("/api/mmf/4/queue", {"queued": False})
 
     popup.close()
     # A later sync where purchases drop an item replaces them; pledges failing keeps the old ones.
