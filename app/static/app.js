@@ -517,6 +517,7 @@ function openFileEdit(f) {
   form.onsubmit = null;
   $("#fileDlg").onclose = async () => {
     const action = $("#fileDlg").returnValue;
+    if (action === "map") { openMapper(f.path); return; }
     if (action !== "save" && action !== "hide") return;
     const body = { prefixes: [form.scope.value] };
     if (action === "hide") body.hidden = 1;
@@ -533,6 +534,104 @@ function openFileEdit(f) {
     try { await openModel(state.model.id); } catch { $("#modelDlg").close(); }
   };
 }
+
+// ------------------------------------------------------------ folder mappings
+
+const ROLE_LABELS = { creator: "Creator", release: "Release", model: "Model", ignore: "Skip", auto: "Automatic" };
+const mapper = { parts: [], name: "", map: null, scopeTouched: false, timer: null, seq: 0 };
+
+function mapRoles() { return [...$("#mapSegs").querySelectorAll("select")].map((s) => s.value); }
+function mapPrefix() { return $("#mapForm").scope.value; }
+function defaultScope(roles) {
+  // The folder holding the release, so the mapping covers that creator's other releases too.
+  const r = roles.indexOf("release");
+  return mapper.parts.slice(0, Math.max(r, 1)).join("/");
+}
+function renderMapSegs(roles) {
+  $("#mapSegs").innerHTML = mapper.parts.map((p, i) => `
+    <div class="map-seg role-${roles[i] || "auto"}" style="--lvl:${i}">
+      <span class="seg-name" title="${esc(p)}">${esc(p)}</span>
+      <select data-i="${i}">${Object.entries(ROLE_LABELS).map(([v, l]) => `<option value="${v}" ${v === (roles[i] || "auto") ? "selected" : ""}>${l}</option>`).join("")}</select>
+    </div>`).join("") + `<div class="map-seg" style="--lvl:${mapper.parts.length}"><span class="seg-name muted">${esc(mapper.name)}</span></div>`;
+}
+async function openMapper(path) {
+  const parts = path.split("/");
+  mapper.name = parts.pop();
+  mapper.parts = parts;
+  if (!parts.length) { alert("This file sits at the top of the library, so there are no folders to map."); return; }
+  const s = await api(`/api/maps/suggest?path=${encodeURIComponent(path)}`);
+  mapper.map = s.map;
+  mapper.scopeTouched = !!s.map;
+  const roles = s.map ? s.map.roles : s.roles;
+  renderMapSegs(roles);
+  const sel = $("#mapForm").scope;
+  sel.innerHTML = parts.map((_, i) => {
+    const pre = parts.slice(0, i + 1).join("/");
+    return `<option value="${esc(pre)}">Everything in ${esc(parts.slice(0, i + 1).join(" / "))}</option>`;
+  }).join("");
+  sel.value = s.map ? s.map.prefix : defaultScope(roles);
+  $("#mapRemove").classList.toggle("hidden", !s.map);
+  $("#mapErr").textContent = "";
+  $("#mapPreview").innerHTML = "";
+  if (!$("#mapDlg").open) $("#mapDlg").showModal();
+  previewMap();
+}
+function groupList(groups, limit = 40) {
+  const li = groups.slice(0, limit).map((g) => `<li>${esc([g.creator, g.release, g.model].filter(Boolean).join(" / "))}<span class="muted">${g.files} file${g.files === 1 ? "" : "s"}</span></li>`).join("");
+  return `<ul>${li}${groups.length > limit ? `<li class="muted">and ${groups.length - limit} more</li>` : ""}</ul>`;
+}
+function previewMap() {
+  clearTimeout(mapper.timer);
+  mapper.timer = setTimeout(async () => {
+    const seq = ++mapper.seq;
+    try {
+      const p = await api("/api/maps/preview", { method: "POST", body: JSON.stringify({ prefix: mapPrefix(), roles: mapRoles() }) });
+      if (seq !== mapper.seq) return;
+      $("#mapErr").textContent = "";
+      const n = (g) => `${g.length} model${g.length === 1 ? "" : "s"}`;
+      $("#mapPreview").innerHTML = `<div><b>${p.files} file${p.files === 1 ? "" : "s"}</b> in this folder. With this mapping they group into ${n(p.after)}:</div>` +
+        groupList(p.after) + `<details><summary class="muted small">Now: ${n(p.before)}</summary>${groupList(p.before)}</details>`;
+    } catch (err) {
+      if (seq !== mapper.seq) return;
+      $("#mapErr").textContent = err.message;
+      $("#mapPreview").innerHTML = "";
+    }
+  }, 200);
+}
+$("#mapSegs").addEventListener("change", (e) => {
+  const sel = e.target.closest("select");
+  if (!sel) return;
+  // One release and one model: picking one moves it off the folder that had it.
+  const roles = mapRoles();
+  if (sel.value === "release" || sel.value === "model") roles.forEach((r, i) => { if (r === sel.value && i !== +sel.dataset.i) roles[i] = "ignore"; });
+  const m = roles.indexOf("model"), end = m >= 0 ? m : roles.indexOf("release");
+  roles.forEach((r, i) => {
+    if (m >= 0 && i > m) roles[i] = "auto";  // below the model: read automatically
+    else if (i < end && r === "auto") roles[i] = "ignore";  // above it, a folder without a role is skipped
+  });
+  renderMapSegs(roles);
+  if (!mapper.scopeTouched) $("#mapForm").scope.value = defaultScope(roles);
+  previewMap();
+});
+$("#mapForm").scope.addEventListener("change", () => { mapper.scopeTouched = true; previewMap(); });
+$("#mapForm").addEventListener("submit", async (e) => {
+  const action = e.submitter?.value;
+  if (action !== "save" && action !== "remove") return;
+  e.preventDefault();
+  try {
+    if (action === "remove") await api(`/api/maps/${mapper.map.id}`, { method: "DELETE" });
+    else await api("/api/maps", { method: "POST", body: JSON.stringify({ prefix: mapPrefix(), roles: mapRoles() }) });
+  } catch (err) { $("#mapErr").textContent = err.message; return; }
+  $("#mapDlg").close();
+  $("#modelDlg").close();  // the model may have been regrouped under a new name
+  if ($("#rulesDlg").open) $("#rulesBtn").onclick();
+  refresh();
+});
+$("#mMapBtn").onclick = () => {
+  const m = state.model;
+  const f = m.files.find((x) => x.id === m.cover) || m.files[0];
+  if (f) openMapper(f.path);
+};
 
 // ------------------------------------------------------------ 3D viewer (three.js from CDN, optional)
 
@@ -596,8 +695,18 @@ $("#rulesBtn").onclick = async () => {
     if (r.hidden) ch.push("hidden");
     return `<tr><td class="path">${esc(r.prefix)}</td><td>${ch.join("<br>")}</td><td><button data-del="${r.id}">Delete</button></td></tr>`;
   }).join("") : `<tr><td class="muted">No corrections yet. Use Edit on a model, or ✎ on a file.</td></tr>`;
+  const maps = await api("/api/maps");
+  $("#mapsTable").innerHTML = maps.length ? `<tr><th>Folder</th><th>Levels</th><th>Files</th><th></th></tr>` + maps.map((m) =>
+    `<tr><td class="path">${esc(m.prefix)}</td><td>${m.roles.map((r) => ROLE_LABELS[r]).join(" / ")}</td><td>${m.files}</td><td><button data-del-map="${m.id}">Delete</button></td></tr>`).join("")
+    : `<tr><td class="muted">No folder mappings yet.</td></tr>`;
   if (!$("#rulesDlg").open) $("#rulesDlg").showModal();
 };
+$("#mapsTable").addEventListener("click", async (e) => {
+  const id = e.target.dataset.delMap; if (!id) return;
+  await api(`/api/maps/${id}`, { method: "DELETE" });
+  $("#rulesBtn").onclick();
+  refresh();
+});
 $("#rulesTable").addEventListener("click", async (e) => {
   const id = e.target.dataset.del; if (!id) return;
   await api(`/api/overrides/${id}`, { method: "DELETE" });

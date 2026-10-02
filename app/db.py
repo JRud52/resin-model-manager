@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS folder_layouts (
     depth INTEGER NOT NULL
 );
 
+-- Folder mappings the user drew on a path: what each folder level is (creator,
+-- release, model, ignore) for every file under prefix. Longer prefixes win, and a
+-- mapping replaces the automatic guess; corrections (overrides) still apply on top.
+CREATE TABLE IF NOT EXISTS path_maps (
+    id INTEGER PRIMARY KEY,
+    prefix TEXT NOT NULL UNIQUE,
+    roles TEXT NOT NULL,             -- JSON list, one role per folder from the library root
+    created REAL DEFAULT (strftime('%s','now'))
+);
+
 -- Values saved from the Settings dialog (see settings.py).
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,

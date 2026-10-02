@@ -39,6 +39,18 @@ groups them by **release** and **model**, separates **supported** and
   `presupported`, `pre-supp`, `_sup`, `unsupported`, `no supports`, ...). A
   file with no supported marker in its name or any parent folder counts as
   unsupported.
+* **Folder mappings.** When a creator's folders don't fit the automatic guess,
+  open one of their models and click *Map folders*. The file's path is shown one
+  folder per line; mark each folder as Creator, Release, Model or Skip (folders
+  below the model, like `Supported` or `Heads`, are still read automatically),
+  and pick which folder the mapping applies to, usually the creator's folder. A
+  preview shows how the files in it will group before you save. Every file in
+  that folder with the same layout is then read that way, so one mapping fixes
+  all of a creator's releases. A mapping on a deeper folder wins over a wider
+  one; corrections below still apply on top, and tags follow the regrouped
+  models. Mappings are listed (and deleted) under ✎ Corrections.
+
+  ![Folder mapping](docs/mapping.png)
 * **Corrections.** The guesses will sometimes be wrong. *Edit* on a model renames
   it or moves it to another release (renaming onto an existing model merges
   them); ✎ on a file changes its support flag, model, release or option group,

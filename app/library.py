@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -365,30 +366,80 @@ def model_id(release: str, model: str) -> str:
     return hashlib.sha1(key.encode()).hexdigest()[:12]
 
 
-def reclassify():
-    """Re-run the heuristics plus user overrides over every indexed file."""
-    c = db.conn()
+def _under(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(prefix.rstrip("/") + "/")
+
+
+def path_maps() -> list[dict]:
+    return [{"id": r["id"], "prefix": r["prefix"], "roles": json.loads(r["roles"])}
+            for r in db.conn().execute("SELECT * FROM path_maps ORDER BY prefix COLLATE NOCASE")]
+
+
+class _Reader:
+    """Reads release / model / creator for logical paths: the user's folder mapping
+    for the path when there is one, else the automatic guess."""
+
+    def __init__(self, rows, overrides, set_creators, extra_map: tuple[str, tuple] | None = None):
+        self.layouts, self.default_depth = folder_layouts(), settings.get("release_depth")
+        self.ignored = classify.parse_keys(settings.get("ignored_folders"))
+        maps = {m["prefix"]: tuple(m["roles"]) for m in path_maps()}
+        if extra_map:
+            maps[extra_map[0]] = tuple(extra_map[1])
+        self.maps = sorted(maps.items(), key=lambda kv: -len(kv[0]))  # longest prefix wins
+        self.by_folder: dict[str, list[str]] = defaultdict(list)
+        for r in rows:
+            lp = PurePosixPath(r["logical_path"])
+            self.by_folder[str(lp.parent)].append(lp.stem)
+        self.creator_keys = self._creator_keys(rows, set_creators, overrides)
+
+    def roles_for(self, lp: str) -> tuple | None:
+        return next((roles for pre, roles in self.maps if _under(lp, pre)), None)
+
+    def guess(self, lp: str) -> classify.Guess:
+        siblings = self.by_folder.get(str(PurePosixPath(lp).parent), [])
+        roles = self.roles_for(lp)
+        if roles:
+            return classify.mapped(lp, roles, siblings, self.creator_keys)
+        return classify.guess(lp, depth_for(lp, self.layouts, self.default_depth), siblings,
+                              self.creator_keys, self.ignored)
+
+    def _creator_keys(self, rows, set_creators, overrides) -> set[str]:
+        """Every creator name we know of, so a release that repeats its creator's folder
+        inside it (Creator/Release/Creator/Model) still finds the real model folders, and
+        Freebies/Creator/Release is told apart from Freebies/Release."""
+        keys = {classify.name_key(n) for n in set_creators}
+        keys |= {classify.name_key(o["creator"]) for o in overrides if o["creator"]}
+        for r in rows:
+            parts = PurePosixPath(r["logical_path"]).parts
+            roles = self.roles_for(r["logical_path"])
+            if roles:
+                keys |= {classify.name_key(f) for f, role in zip(parts[:-1], roles) if role == "creator"}
+                continue
+            if parts and classify.name_key(parts[0]) in self.ignored:
+                continue
+            depth = depth_for(r["logical_path"], self.layouts, self.default_depth)
+            keys |= {classify.name_key(f) for f in parts[:min(depth, len(parts) - 1)]}
+        return keys - self.ignored - {""}
+
+
+def _context(c, extra_map=None):
     rows = c.execute("SELECT id, logical_path, ext FROM files").fetchall()
     overrides = sorted(c.execute("SELECT * FROM overrides").fetchall(), key=lambda r: len(r["prefix"]))
-    by_folder: dict[str, list[str]] = defaultdict(list)
-    for r in rows:
-        lp = PurePosixPath(r["logical_path"])
-        by_folder[str(lp.parent)].append(lp.stem)
     release_creators = {r["release"].lower(): r["creator"]
                         for r in c.execute("SELECT release, creator FROM release_creators")}
-    layouts, default_depth = folder_layouts(), settings.get("release_depth")
-    ignored = classify.parse_keys(settings.get("ignored_folders"))
-    creator_keys = _creator_keys(rows, release_creators.values(), overrides, layouts, default_depth, ignored)
+    return rows, overrides, release_creators, _Reader(rows, overrides, release_creators.values(), extra_map)
+
+
+def _classify(rows, overrides, release_creators, reader) -> list[list]:
+    """[creator, release, model, model_id, option, supported, model_root, hidden, id] per row."""
     updates = []
     for r in rows:
         lp = r["logical_path"]
-        g = classify.guess(lp, depth_for(lp, layouts, default_depth), by_folder[str(PurePosixPath(lp).parent)],
-                           creator_keys, ignored)
+        g = reader.guess(lp)
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
         creator, set_unknown = g.creator, False
         for o in overrides:
-            pre = o["prefix"]
-            if lp == pre or lp.startswith(pre.rstrip("/") + "/"):
+            if _under(lp, o["prefix"]):
                 release = o["release"] if o["release"] is not None else release
                 model = o["model"] if o["model"] is not None else model
                 option = o["option"] if o["option"] is not None else option
@@ -405,25 +456,90 @@ def reclassify():
             sup = 0
         updates.append([creator, release, model, model_id(release, model), option, sup,
                         g.model_root, hidden, r["id"]])
+    return updates
+
+
+def reclassify():
+    """Re-run the heuristics, folder mappings and user overrides over every indexed file."""
+    c = db.conn()
+    rows, overrides, release_creators, reader = _context(c)
+    updates = _classify(rows, overrides, release_creators, reader)
     c.executemany("UPDATE files SET creator=?, release=?, model=?, model_id=?, option=?, supported=?, "
                   "model_root=?, hidden=? WHERE id=?", updates)
-    match_images(c, overrides, creator_keys, ignored)
+    match_images(c, overrides, reader)
     c.commit()
 
 
-def _creator_keys(rows, set_creators, overrides, layouts, default_depth, ignored) -> set[str]:
-    """Every creator name we know of, so a release that repeats its creator's folder
-    inside it (Creator/Release/Creator/Model) still finds the real model folders, and
-    Freebies/Creator/Release is told apart from Freebies/Release."""
-    keys = {classify.name_key(n) for n in set_creators}
-    keys |= {classify.name_key(o["creator"]) for o in overrides if o["creator"]}
-    for r in rows:
-        parts = PurePosixPath(r["logical_path"]).parts
-        if parts and classify.name_key(parts[0]) in ignored:
+# ---------------------------------------------------------------- folder mappings
+
+def map_suggestion(path: str) -> dict:
+    """How a path is read now, as a folder mapping the user can start from."""
+    c = db.conn()
+    _, _, _, reader = _context(c)
+    pre = next((p for p, _ in reader.maps if _under(path, p)), None)
+    g = reader.guess(path)
+    return {"roles": list(g.roles), "map": next((m for m in path_maps() if m["prefix"] == pre), None)}
+
+
+def _groups(updates) -> list[dict]:
+    out: dict[tuple, dict] = {}
+    for u in updates:
+        if u[7]:  # hidden
             continue
-        depth = depth_for(r["logical_path"], layouts, default_depth)
-        keys |= {classify.name_key(f) for f in parts[:min(depth, len(parts) - 1)]}
-    return keys - ignored - {""}
+        g = out.setdefault(u[3], {"creator": u[0], "release": u[1], "model": u[2], "files": 0})
+        g["files"] += 1
+    return sorted(out.values(), key=lambda g: (g["creator"].lower(), g["release"].lower(), g["model"].lower()))
+
+
+def preview_map(prefix: str, roles: tuple) -> dict:
+    """How the files under prefix group now, and how they would with this mapping."""
+    c = db.conn()
+    rows, overrides, release_creators, reader = _context(c, (prefix, roles))
+    affected = [r for r in rows if _under(r["logical_path"], prefix)]
+    now = c.execute("SELECT creator, release, model, model_id, hidden, logical_path FROM files").fetchall()
+    before = [[r["creator"], r["release"], r["model"], r["model_id"], 0, 0, "", r["hidden"]]
+              for r in now if _under(r["logical_path"], prefix)]
+    after = _classify(affected, overrides, release_creators, reader)
+    return {"files": len(affected), "before": _groups(before), "after": _groups(after)}
+
+
+def _model_ids(prefix: str) -> dict[int, str]:
+    return {r["id"]: r["model_id"] for r in db.conn().execute("SELECT id, model_id, logical_path FROM files")
+            if _under(r["logical_path"], prefix)}
+
+
+def _carry_tags(before: dict[int, str]):
+    """Tags follow files whose model changed (copied, so undoing a mapping keeps them)."""
+    c = db.conn()
+    after = {r["id"]: r["model_id"] for r in c.execute("SELECT id, model_id FROM files")}
+    for old, new in {(m, after[i]) for i, m in before.items() if i in after and after[i] != m}:
+        c.execute("INSERT OR IGNORE INTO model_tags(model_id, tag) SELECT ?, tag FROM model_tags WHERE model_id=?",
+                  (new, old))
+    c.commit()
+
+
+def save_map(prefix: str, roles: tuple):
+    c = db.conn()
+    before = _model_ids(prefix)
+    c.execute("INSERT INTO path_maps(prefix, roles) VALUES (?, ?) ON CONFLICT(prefix) DO UPDATE SET roles=excluded.roles",
+              (prefix, json.dumps(list(roles))))
+    c.commit()
+    reclassify()
+    _carry_tags(before)
+    _preview_wakeup.set()
+
+
+def delete_map(map_id: int) -> bool:
+    c = db.conn()
+    row = c.execute("SELECT prefix FROM path_maps WHERE id=?", (map_id,)).fetchone()
+    if not row:
+        return False
+    before = _model_ids(row["prefix"])
+    c.execute("DELETE FROM path_maps WHERE id=?", (map_id,))
+    c.commit()
+    reclassify()
+    _carry_tags(before)
+    return True
 
 
 # ---------------------------------------------------------------- bundled preview pictures
@@ -474,7 +590,7 @@ def _name_match(words: list[str], candidates: dict) -> tuple | None:
     return hits.pop() if len(hits) == 1 else None
 
 
-def match_images(c, overrides, creator_keys: set[str] | None = None, ignored: set[str] | None = None):
+def match_images(c, overrides, reader: _Reader):
     """Attach each picture to a model, or else to its release.
 
     * A picture inside a model's folder (at any depth) belongs to that model.
@@ -510,14 +626,12 @@ def match_images(c, overrides, creator_keys: set[str] | None = None, ignored: se
 
     known = {f["model_id"] for f in files}  # a picture rule naming a model that no longer exists is ignored
     updates = []
-    layouts, default_depth = folder_layouts(), settings.get("release_depth")
     for r in c.execute("SELECT id, logical_path FROM images").fetchall():
         lp = PurePosixPath(r["logical_path"])
         folders = list(lp.parent.parts)
-        depth = depth_for(r["logical_path"], layouts, default_depth)
-        release = classify.guess(r["logical_path"], depth, None, creator_keys, ignored).release
-        skipped, d = classify.layout(folders, depth, ignored, creator_keys)
-        depth = skipped + d  # index of the release folder
+        g = reader.guess(r["logical_path"])
+        release = g.release
+        depth = g.release_index if g.release_index >= 0 else len(folders)  # index of the release folder
         release_raw = folders[depth] if len(folders) > depth else ""
         hidden, forced = 0, None
         for o in overrides:

@@ -73,6 +73,7 @@
       </div>
     </div>
     <div class="spacer"></div>
+    <button id="mMapBtn" title="Say which folders in the path are the creator, release and model">Map folders</button>
     <button id="mEditBtn">Edit</button>
     <button class="icon" data-close>✕</button>
   </div>
@@ -127,7 +128,25 @@
     <div class="row">
       <button value="save" class="primary">Save</button>
       <button value="hide" id="hideFileBtn">Hide</button>
+      <button value="map" title="Say which folders in this path are the creator, release and model">Map folders…</button>
       <button value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="mapDlg">
+  <form id="mapForm" class="card-form" method="dialog">
+    <div class="dlg-head"><h3>Map folders</h3><div class="spacer"></div><button class="icon" value="cancel" formnovalidate>✕</button></div>
+    <p class="muted small">Say what each folder in this path is. Folders above the release are the creator or skipped; folders below the model (supported, heads, ...) are read automatically.</p>
+    <div id="mapSegs"></div>
+    <label>Apply to <select name="scope"></select></label>
+    <p class="muted small">The mapping is used for every file in that folder with the same layout, so mapping one release of a creator fixes all of them. A mapping on a deeper folder wins over a wider one.</p>
+    <div id="mapPreview"></div>
+    <p class="small err" id="mapErr"></p>
+    <div class="row">
+      <button value="save" class="primary">Save mapping</button>
+      <button value="remove" id="mapRemove" class="hidden" formnovalidate>Remove mapping</button>
+      <button value="cancel" formnovalidate>Cancel</button>
     </div>
   </form>
 </dialog>
@@ -136,6 +155,9 @@
   <div class="dlg-head"><h2>Corrections</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
   <p class="muted small">Each rule applies to every file whose path starts with the folder shown. Delete a rule to go back to the automatic guess.</p>
   <table id="rulesTable"></table>
+  <h3>Folder mappings</h3>
+  <p class="muted small">Each mapping says which folder levels are the creator, release and model for every file in the folder shown. Use <b>Map folders</b> on a model to add one.</p>
+  <table id="mapsTable"></table>
   <div class="row" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
 </dialog>
 
