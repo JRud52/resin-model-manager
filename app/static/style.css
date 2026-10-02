@@ -24,10 +24,13 @@ header h1 { font-size: 17px; margin: 0 8px 0 0; white-space: nowrap; }
 #search { width: min(360px, 100%); }
 #jobStatus { font-size: 12px; max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #menuBtn { display: none; }
-#version { position: fixed; left: 10px; bottom: 6px; font-size: 11px; z-index: 20; pointer-events: none; }
+#version { position: fixed; left: 8px; bottom: 6px; font-size: 11px; z-index: 20; pointer-events: none; padding: 2px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); }
 
 #layout { display: flex; min-height: calc(100vh - 56px); }
-#sidebar { width: 260px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; max-height: calc(100vh - 56px); position: sticky; top: 56px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#sidebar { width: var(--side-w, 260px); flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; max-height: calc(100vh - 56px); position: sticky; top: 56px; padding-bottom: 28px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#sideResize { width: 6px; margin-left: -3px; margin-right: -3px; flex-shrink: 0; cursor: col-resize; position: sticky; top: 56px; height: calc(100vh - 56px); z-index: 2; }
+#sideResize:hover, #sideResize.dragging { background: var(--accent); opacity: .5; }
+body.resizing { cursor: col-resize; user-select: none; }
 /* One scroll for the whole sidebar; each section title stays pinned while its list scrolls past. */
 .side-title { position: sticky; top: 0; z-index: 1; background: var(--panel); padding: 12px 16px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 #releases, #creators { list-style: none; margin: 0; padding: 0 8px 16px; }
@@ -124,6 +127,7 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 
 @media (max-width: 800px) {
   #menuBtn { display: inline-block; }
+  #sideResize { display: none; }
   #sidebar { position: fixed; left: 0; top: 0; bottom: 0; max-height: none; z-index: 10; transform: translateX(-100%); transition: transform .2s; }
   #sidebar.open { transform: none; box-shadow: 0 0 40px #000; }
   .dlg-body { grid-template-columns: 1fr; }
