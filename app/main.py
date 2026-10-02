@@ -227,7 +227,7 @@ def model_detail(model_id: str, include_hidden: bool = False):
     return {
         "id": model_id, "model": rows[0]["model"], "release": rows[0]["release"], "creator": rows[0]["creator"],
         "cover": covers.get(model_id),
-        "images": library.model_images(model_id),
+        "images": library.model_images(model_id, rows[0]["release"]),
         "tags": _tags_for([model_id])[model_id],
         "roots": sorted({r["model_root"] for r in rows}),
         "combine": library.combine_for(rows[0]["release"], rows[0]["model"]),
@@ -256,6 +256,24 @@ def image_full(image_id: int):
     """The bundled picture as it is, straight out of its archive if need be."""
     r = db.conn().execute("SELECT * FROM images WHERE id=?", (image_id,)).fetchone()
     return _send(r, inline=True)
+
+
+class MainPictureIn(BaseModel):
+    kind: str                       # release | model
+    key: str                        # release name or model id
+    image_id: Optional[int] = None  # None goes back to the automatic pick
+
+
+@app.put("/api/main-picture")
+def main_picture(m: MainPictureIn):
+    """Pick the picture shown first for a release or a model."""
+    if m.kind not in ("release", "model") or not m.key:
+        raise HTTPException(400, "kind must be release or model, with a key")
+    try:
+        library.set_main_picture(m.kind, m.key, m.image_id)
+    except KeyError:
+        raise HTTPException(404, "No such picture")
+    return {"ok": True}
 
 
 @app.get("/api/files/{file_id}/download")
@@ -406,6 +424,8 @@ def add_override(o: OverrideIn):
             c.execute("INSERT OR IGNORE INTO model_tags(model_id, tag) SELECT ?, tag FROM model_tags WHERE model_id=?",
                       (new_id, o.from_model_id))
             c.execute("DELETE FROM model_tags WHERE model_id=?", (o.from_model_id,))
+            c.execute("UPDATE OR IGNORE main_pictures SET key=? WHERE kind='model' AND key=?",
+                      (new_id, o.from_model_id))
             c.commit()
     library._preview_wakeup.set()
     return {"ok": True}
