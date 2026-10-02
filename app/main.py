@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import mimetypes
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Union
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -577,7 +578,7 @@ def mmf_clear():
 @app.get("/mmf-sync")
 def mmf_sync_page():
     """Opened by the sync bookmarklet; receives the library from the MyMiniFactory tab."""
-    return FileResponse(STATIC / "mmf-sync.html")
+    return FileResponse(STATIC / "mmf-sync.html", headers=NO_CACHE)
 
 
 @app.get("/api/hidden")
@@ -586,9 +587,28 @@ def hidden_files():
     return [_file_dict(r) for r in rows]
 
 
+# Changes with every image, so browsers fetch the new app.js/style.css after an
+# update instead of running a cached copy against the new server.
+ASSET_VERSION = config.GIT_COMMIT or str(int(time.time()))
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "style.css"):
+        html = html.replace(f"/static/{name}\"", f"/static/{name}?v={ASSET_VERSION}\"")
+    return HTMLResponse(html, headers=NO_CACHE)
+
+
+@app.middleware("http")
+async def revalidate_static(request: Request, call_next):
+    # Without Cache-Control browsers guess how long to reuse these files, which
+    # can hide an update for days. no-cache still lets them reuse via ETag.
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
