@@ -21,7 +21,7 @@ def obj(i, name, creator="Dragon Forge", **extra):
             "images": {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/{i}.png"}}]}, **extra}
 
 
-PURCHASES = [obj(1, "Red Dragon - Supported"), obj(2, "Ancient Wyrm"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
+PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
 PLEDGES = [obj(4, "Siege Tower", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
 TRIBE = [obj(5, "Goblin Boss", creator="Greenskins"), obj(6, "Goblin Shaman", creator="Greenskins")]
 
@@ -89,7 +89,7 @@ with sync_playwright() as p:
     print("status:", s)
     assert s["total"] == 6 and s["sources"] == {"purchase": 3, "pledge": 1, "tribe": 2}, s
     items = {m["name"]: m for m in get("/api/mmf")["items"]}
-    assert items["Red Dragon - Supported"]["local"]["model_id"], "matches the local Red Dragon model"
+    assert items["Lich King - Supported"]["local"]["model_id"], "matches the local Lich King model"
     assert items["Goblin Boss"]["local"], "matches the local Goblin Boss model"
     assert not items["Ancient Wyrm"]["local"]
     assert items["Siege Tower"]["sources"] == [{"source": "pledge", "collection": "Kickstarter: Castle Siege"}]

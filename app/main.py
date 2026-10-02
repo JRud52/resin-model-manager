@@ -229,6 +229,7 @@ def model_detail(model_id: str, include_hidden: bool = False):
         "images": library.model_images(model_id),
         "tags": _tags_for([model_id])[model_id],
         "roots": sorted({r["model_root"] for r in rows}),
+        "combine": library.combine_for(rows[0]["release"], rows[0]["model"]),
         "files": [_file_dict(r) for r in rows],
     }
 
@@ -353,7 +354,13 @@ class CreatorIn(BaseModel):
 @app.post("/api/releases/creator")
 def set_release_creator(body: CreatorIn):
     """Set the creator of one or more releases. Kept across re-indexing."""
-    creator = " ".join(body.creator.split())
+    creator = _set_creator(body.releases, body.creator)
+    library.reclassify()
+    return {"releases": len(body.releases), "creator": creator}
+
+
+def _set_creator(releases: list[str], creator: str) -> str:
+    creator = " ".join(creator.split())
     if len(creator) > 200:
         raise HTTPException(400, "Creator name is too long")
     c = db.conn()
@@ -361,15 +368,14 @@ def set_release_creator(body: CreatorIn):
         row = c.execute("SELECT creator FROM files WHERE creator = ? COLLATE NOCASE AND hidden=0 LIMIT 1",
                         (creator,)).fetchone()
         creator = row[0] if row else creator
-    for release in body.releases:
+    for release in releases:
         if creator:
             c.execute("INSERT INTO release_creators(release, creator) VALUES (?, ?) "
                       "ON CONFLICT(release) DO UPDATE SET creator=excluded.creator", (release, creator))
         else:
             c.execute("DELETE FROM release_creators WHERE release = ?", (release,))
     c.commit()
-    library.reclassify()
-    return {"releases": len(body.releases), "creator": creator}
+    return creator
 
 
 # ---------------------------------------------------------------- corrections
@@ -388,20 +394,10 @@ class OverrideIn(BaseModel):
 @app.post("/api/overrides")
 def add_override(o: OverrideIn):
     c = db.conn()
-    for prefix in o.prefixes:
-        prefix = prefix.strip().strip("/")
-        if not prefix:
-            raise HTTPException(400, "Empty prefix")
-        existing = c.execute("SELECT * FROM overrides WHERE prefix=?", (prefix,)).fetchone()
-        vals = {k: getattr(o, k) for k in ("release", "model", "option", "creator", "supported", "hidden")}
-        if existing:
-            merged = {k: (vals[k] if vals[k] is not None else existing[k]) for k in vals}
-            c.execute("UPDATE overrides SET release=?, model=?, option=?, creator=?, supported=?, hidden=? WHERE id=?",
-                      (*merged.values(), existing["id"]))
-        else:
-            c.execute("INSERT INTO overrides(prefix, release, model, option, creator, supported, hidden) "
-                      "VALUES (?,?,?,?,?,?,?)", (prefix, *vals.values()))
-    c.commit()
+    prefixes = [p.strip().strip("/") for p in o.prefixes]
+    if not all(prefixes):
+        raise HTTPException(400, "Empty prefix")
+    library.add_overrides(prefixes, {k: getattr(o, k) for k in library._OVERRIDE_FIELDS})
     library.reclassify()
     if o.from_model_id and o.model is not None and o.release is not None:
         new_id = library.model_id(o.release, o.model)
@@ -475,6 +471,78 @@ def save_map(m: MapIn):
 @app.delete("/api/maps/{map_id}")
 def delete_map(map_id: int):
     if not library.delete_map(map_id):
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- bulk edit
+
+class BulkIn(BaseModel):
+    model_ids: list[str]
+    add_tags: list[str] = []
+    remove_tags: list[str] = []
+    release: Optional[str] = None   # move them to this release
+    creator: Optional[str] = None   # creator of the release(s) they end up in; '' = back to the guess
+    supported: Optional[int] = None  # 1 / 0 / -1 (unknown)
+    hidden: Optional[int] = None
+
+
+@app.post("/api/models/bulk")
+def bulk_edit(b: BulkIn):
+    """Edit several models at once (tags first, so they move with the models)."""
+    if not b.model_ids:
+        raise HTTPException(400, "Pick some models")
+    release = " ".join(b.release.split()) if b.release is not None else None
+    if b.supported not in (None, 1, 0, -1):
+        raise HTTPException(400, "Bad support value")
+    _apply_tags(b.model_ids, TagsIn(add=b.add_tags, remove=b.remove_tags))
+    releases = library.bulk_edit(b.model_ids, release or None, b.supported, 1 if b.hidden else None)
+    if b.creator is not None and releases:
+        _set_creator(releases, b.creator)
+        library.reclassify()
+    return {"models": len(b.model_ids), "releases": releases}
+
+
+# ---------------------------------------------------------------- combined models
+
+class CombineIn(BaseModel):
+    release: str
+    name: str
+    model_ids: list[str] = []
+
+
+def _combine_name(name: str) -> str:
+    name = " ".join(name.split())
+    if not name or len(name) > 200:
+        raise HTTPException(400, "Give the combined model a name")
+    return name
+
+
+@app.get("/api/combines")
+def list_combines():
+    return library.combines()
+
+
+@app.post("/api/combines")
+def combine(body: CombineIn):
+    """Combine models of a release into one; each becomes an option group."""
+    try:
+        return library.combine_models(body.release, body.model_ids, _combine_name(body.name))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/combines/{combine_id}")
+def update_combine(combine_id: int, body: CombineIn):
+    """Rename a combined model or move it to another release."""
+    if not library.update_combine(combine_id, _combine_name(body.name), body.release):
+        raise HTTPException(404)
+    return {"id": library.model_id(body.release, body.name)}
+
+
+@app.delete("/api/combines/{combine_id}")
+def split_combine(combine_id: int):
+    if not library.split_combine(combine_id):
         raise HTTPException(404)
     return {"ok": True}
 
