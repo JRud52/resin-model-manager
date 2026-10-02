@@ -80,7 +80,7 @@ function card(m) {
   if (m.options) b.push(`<span class="badge">${m.options} option groups</span>`);
   (m.tags || []).forEach((t) => b.push(`<span class="badge tag">${esc(t)}</span>`));
   m.exts.filter((x) => x && x !== ".stl").forEach((x) => b.push(`<span class="badge">${esc(x.slice(1).toUpperCase())}</span>`));
-  return `<div class="card" data-id="${m.id}">
+  return `<div class="card ${state.picked?.has(m.id) ? "picked" : ""}" data-id="${m.id}">
     <div class="thumb">${thumb(m)}</div>
     <div class="meta">
       <div class="title" title="${esc(m.model)}">${esc(m.model)}</div>
@@ -110,6 +110,7 @@ async function loadModels(append = false) {
   $("#releaseCreatorBtn").textContent = state.release === null ? "Set creator for several" : "Set creator";
   $("#activeTags").innerHTML = state.tags.map((t) => `<span class="badge tag on" data-tag="${esc(t)}" title="Remove filter">${esc(t)} ✕</span>`).join("");
   $("#releaseTagBtn").classList.toggle("hidden", state.release === null);
+  $("#combineBtn").classList.toggle("hidden", state.total < 2 || !!state.picked);
   $("#modelList").innerHTML = [...new Set(state.items.map((m) => m.model))].map((m) => `<option value="${esc(m)}">`).join("");
   const empty = $("#empty");
   if (!state.total) {
@@ -160,7 +161,98 @@ $("#lightboxModel").addEventListener("change", async (e) => {
 });
 
 $("#more").onclick = () => { state.offset += PAGE; loadModels(true); };
-$("#grid").addEventListener("click", (e) => { const c = e.target.closest(".card"); if (c) openModel(c.dataset.id); });
+$("#grid").addEventListener("click", (e) => {
+  const c = e.target.closest(".card"); if (!c) return;
+  if (!state.picked) { openModel(c.dataset.id); return; }
+  const m = state.items.find((x) => x.id === c.dataset.id);
+  if (state.picked.has(m.id)) state.picked.delete(m.id); else state.picked.set(m.id, m);
+  c.classList.toggle("picked", state.picked.has(c.dataset.id));
+  showPicked();
+});
+
+// ------------------------------------------------------------ combining models
+
+// state.picked: model id -> model, ticked in the grid to edit together or combine.
+// Picks are kept while browsing other releases until Cancel.
+function endPicking() {
+  state.picked = null;
+  $("#grid").classList.remove("selecting");
+  $("#selectBar").classList.add("hidden");
+  document.querySelectorAll("#grid .card.picked").forEach((c) => c.classList.remove("picked"));
+  $("#combineBtn").classList.toggle("hidden", state.total < 2);
+}
+const pickedReleases = () => new Set([...state.picked.values()].map((m) => m.release));
+function showPicked() {
+  const n = state.picked.size;
+  $("#selectCount").textContent = n ? `${n} model${n === 1 ? "" : "s"} picked` : "Click models to pick them";
+  $("#bulkGo").disabled = !n;
+  // Only models of one release can become one model.
+  $("#combineGo").disabled = n < 2 || pickedReleases().size > 1;
+}
+$("#combineBtn").onclick = () => {
+  state.picked = new Map();
+  $("#grid").classList.add("selecting");
+  $("#selectBar").classList.remove("hidden");
+  $("#combineBtn").classList.add("hidden");
+  showPicked();
+};
+$("#selectCancel").onclick = endPicking;
+$("#selectAll").onclick = () => {
+  state.items.forEach((m) => state.picked.set(m.id, m));
+  document.querySelectorAll("#grid .card").forEach((c) => c.classList.add("picked"));
+  showPicked();
+};
+$("#combineGo").onclick = () => {
+  const form = $("#combineDlg form");
+  const parts = [...state.picked.values()];
+  form.name.value = parts[0].release;  // a release that is really one model is usually named after it
+  $("#combineParts").innerHTML = parts.map((m) => `<li>${esc(m.model)}</li>`).join("");
+  $("#combineErr").textContent = "";
+  $("#combineDlg").showModal();
+  form.name.select();
+};
+$("#bulkGo").onclick = () => {
+  const form = $("#bulkDlg form");
+  form.reset();
+  const n = state.picked.size, rels = pickedReleases();
+  $("#bulkTitle").textContent = `Edit ${n} model${n === 1 ? "" : "s"}` + (rels.size > 1 ? ` in ${rels.size} releases` : "");
+  $("#bulkErr").textContent = "";
+  $("#bulkDlg").showModal();
+};
+$("#bulkDlg form").addEventListener("submit", async (e) => {
+  if (e.submitter?.value !== "save") return;
+  e.preventDefault();
+  const f = e.target;
+  const list = (v) => v.split(",").map((t) => t.trim()).filter(Boolean);
+  const body = { model_ids: [...state.picked.keys()], add_tags: list(f.add.value), remove_tags: list(f.remove.value) };
+  if (f.release.value.trim()) body.release = f.release.value.trim();
+  if (f.clearCreator.checked) body.creator = "";
+  else if (f.creator.value.trim()) body.creator = f.creator.value.trim();
+  if (f.supported.value !== "") body.supported = +f.supported.value;
+  if (f.hide.checked) {
+    if (!confirm(`Hide ${body.model_ids.length} models from the library? (Files stay on disk; undo from Corrections.)`)) return;
+    body.hidden = 1;
+  }
+  try {
+    await api("/api/models/bulk", { method: "POST", body: JSON.stringify(body) });
+    $("#bulkDlg").close();
+    endPicking();
+    refresh();
+  } catch (err) { $("#bulkErr").textContent = err.message; }
+});
+$("#combineDlg form").addEventListener("submit", async (e) => {
+  if (e.submitter?.value !== "save") return;
+  e.preventDefault();
+  const form = e.target;
+  try {
+    const res = await api("/api/combines", { method: "POST", body: JSON.stringify({
+      release: [...pickedReleases()][0], name: form.name.value, model_ids: [...state.picked] }) });
+    $("#combineDlg").close();
+    endPicking();
+    await refresh();
+    openModel(res.id);
+  } catch (err) { $("#combineErr").textContent = err.message; }
+});
 
 async function refresh() { loadCreators(); loadTags(); await loadReleases(); await loadModels(); }
 
@@ -471,6 +563,7 @@ $("#mEditBtn").onclick = () => {
   f.model.value = state.model.model;
   f.release.value = state.model.release;
   f.creator.value = state.model.creator || "";
+  $("#splitBtn").classList.toggle("hidden", !state.model.combine);
   f.classList.toggle("hidden");
 };
 $("#cancelEdit").onclick = () => $("#editForm").classList.add("hidden");
@@ -483,7 +576,13 @@ $("#editForm").onsubmit = async (e) => {
   const creator = f.creator.value.trim();
   const creatorChanged = creator !== (state.model.creator || "");
   if (!body.model && !body.release && !creatorChanged) { f.classList.add("hidden"); return; }
-  if (body.model || body.release) {
+  const cb = state.model.combine;
+  if (cb && (body.model || body.release)) {
+    // A combined model is renamed or moved through its combine, so its option groups stay.
+    if (body.release) await api("/api/overrides", { method: "POST", body: JSON.stringify({ prefixes: state.model.roots, release: body.release }) });
+    await api(`/api/combines/${cb.id}`, { method: "PUT", body: JSON.stringify({
+      release: body.release || state.model.release, name: body.model || state.model.model }) });
+  } else if (body.model || body.release) {
     if (!body.model) body.model = state.model.model;
     if (!body.release) body.release = state.model.release;
     await api("/api/overrides", { method: "POST", body: JSON.stringify(body) });
@@ -493,6 +592,13 @@ $("#editForm").onsubmit = async (e) => {
     await api("/api/releases/creator", { method: "POST",
       body: JSON.stringify({ releases: [body.release || state.model.release], creator }) });
   }
+  $("#modelDlg").close();
+  refresh();
+};
+$("#splitBtn").onclick = async () => {
+  const cb = state.model.combine;
+  if (!confirm(`Split ${cb.name} back into ${cb.parts.length} models (${cb.parts.join(", ")})?`)) return;
+  await api(`/api/combines/${cb.id}`, { method: "DELETE" });
   $("#modelDlg").close();
   refresh();
 };
@@ -699,8 +805,18 @@ $("#rulesBtn").onclick = async () => {
   $("#mapsTable").innerHTML = maps.length ? `<tr><th>Folder</th><th>Levels</th><th>Files</th><th></th></tr>` + maps.map((m) =>
     `<tr><td class="path">${esc(m.prefix)}</td><td>${m.roles.map((r) => ROLE_LABELS[r]).join(" / ")}</td><td>${m.files}</td><td><button data-del-map="${m.id}">Delete</button></td></tr>`).join("")
     : `<tr><td class="muted">No folder mappings yet.</td></tr>`;
+  const cbs = await api("/api/combines");
+  $("#combinesTable").innerHTML = cbs.length ? `<tr><th>Release</th><th>Model</th><th>Option groups</th><th></th></tr>` + cbs.map((c) =>
+    `<tr><td>${esc(c.release)}</td><td>${esc(c.name)}</td><td>${c.parts.map(esc).join(", ")}</td><td><button data-split="${c.id}">Split</button></td></tr>`).join("")
+    : `<tr><td class="muted">No combined models yet.</td></tr>`;
   if (!$("#rulesDlg").open) $("#rulesDlg").showModal();
 };
+$("#combinesTable").addEventListener("click", async (e) => {
+  const id = e.target.dataset.split; if (!id) return;
+  await api(`/api/combines/${id}`, { method: "DELETE" });
+  $("#rulesBtn").onclick();
+  refresh();
+});
 $("#mapsTable").addEventListener("click", async (e) => {
   const id = e.target.dataset.delMap; if (!id) return;
   await api(`/api/maps/${id}`, { method: "DELETE" });

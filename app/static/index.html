@@ -43,8 +43,17 @@
       <div id="crumbs"></div>
       <div id="activeTags" class="badges"></div>
       <div class="spacer"></div>
+      <button id="combineBtn" class="hidden" title="Pick several models to edit together or combine into one">Select models</button>
       <button id="releaseCreatorBtn" class="hidden">Set creator</button>
       <button id="releaseTagBtn" class="hidden">Tag all models in this release</button>
+    </div>
+    <div id="selectBar" class="select-bar hidden">
+      <span id="selectCount"></span>
+      <div class="spacer"></div>
+      <button id="selectAll">Select all shown</button>
+      <button id="bulkGo" class="primary" disabled>Edit…</button>
+      <button id="combineGo" class="primary" disabled title="Combine the picked models of one release into one model">Combine…</button>
+      <button id="selectCancel">Cancel</button>
     </div>
     <div id="releaseImages" class="hidden"></div>
     <div id="empty" class="empty hidden"></div>
@@ -99,6 +108,7 @@
         <div class="row">
           <button type="submit" class="primary">Save</button>
           <button type="button" id="hideModelBtn">Hide model</button>
+          <button type="button" id="splitBtn" class="hidden" title="Make the option groups separate models again">Split apart</button>
           <button type="button" id="cancelEdit">Cancel</button>
         </div>
       </form>
@@ -158,6 +168,9 @@
   <h3>Folder mappings</h3>
   <p class="muted small">Each mapping says which folder levels are the creator, release and model for every file in the folder shown. Use <b>Map folders</b> on a model to add one.</p>
   <table id="mapsTable"></table>
+  <h3>Combined models</h3>
+  <p class="muted small">Models combined into one, each former model now an option group. Use <b>Select models</b>, then <b>Combine…</b>, to add one; Split makes them separate models again.</p>
+  <table id="combinesTable"></table>
   <div class="row" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
 </dialog>
 
@@ -250,6 +263,48 @@
     <div class="row">
       <button value="add" class="primary">Add to all</button>
       <button value="remove">Remove from all</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="combineDlg">
+  <form method="dialog" class="card-form">
+    <div class="dlg-head"><h3>Combine into one model</h3><div class="spacer"></div><button class="icon" value="cancel" formnovalidate>✕</button></div>
+    <label>Name of the combined model <input name="name" list="modelList" autocomplete="off" required></label>
+    <p class="muted small">Each model becomes an option group of the combined model, named after it:</p>
+    <ul id="combineParts" class="parts"></ul>
+    <p class="muted small">Kept across re-imports. Undo with Split apart on the model, or from Corrections. Files are never moved or renamed.</p>
+    <p class="small err" id="combineErr"></p>
+    <div class="row">
+      <button value="save" class="primary">Combine</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="bulkDlg">
+  <form method="dialog" class="card-form">
+    <div class="dlg-head"><h3 id="bulkTitle">Edit models</h3><div class="spacer"></div><button class="icon" value="cancel" formnovalidate>✕</button></div>
+    <label>Add tags (comma separated) <input name="add" list="tagOptions" autocomplete="off"></label>
+    <label>Remove tags <input name="remove" list="tagOptions" autocomplete="off"></label>
+    <label>Move to release <input name="release" list="releaseList" autocomplete="off" placeholder="(keep)"></label>
+    <label><span>Creator · applies to the whole release of each model</span>
+      <input name="creator" list="creatorOptions" autocomplete="off" placeholder="(keep)"></label>
+    <label class="check"><input type="checkbox" name="clearCreator"> Clear the creator (back to the folder guess)</label>
+    <label>Support · marks every file of these models, for models that only come in one version
+      <select name="supported">
+        <option value="">(keep)</option>
+        <option value="1">Supported</option>
+        <option value="0">Unsupported</option>
+        <option value="-1">Unknown</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="hide"> Hide these models (undo from Corrections)</label>
+    <p class="muted small">Changes are stored as correction rules and survive new imports; your files are never renamed.</p>
+    <p class="small err" id="bulkErr"></p>
+    <div class="row">
+      <button value="save" class="primary">Save</button>
       <button value="cancel" formnovalidate>Cancel</button>
     </div>
   </form>
