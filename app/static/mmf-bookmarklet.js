@@ -3,7 +3,9 @@
    app's address. It reads the library the way the site's own Library page does
    and hands it to the app's /mmf-sync window (postMessage, because an https page
    can't post to a plain-http NAS address). If that window can't be reached, the
-   library is saved as a file to upload in the app instead. */
+   library is saved as a file to upload in the app instead. Afterwards it downloads
+   the items marked "Download to library" (it has the login, the NAS doesn't) and
+   hands each file to that window, which uploads it into the library. */
 (function () {
   var APP = "__APP__";
   if (!/(^|\.)myminifactory\.com$/.test(location.hostname)) {
@@ -18,6 +20,7 @@
   window.addEventListener("message", function (e) {
     if (e.origin !== APP || !e.data) return;
     if (e.data.type === "mmf-ready") { ready = true; queue.splice(0).forEach(send); }
+    if (e.data.type === "mmf-queue") { finished = true; download(e.data.queue || []); }
     if (e.data.type === "mmf-done") { finished = true; box.textContent = e.data.text; setTimeout(function () { box.remove(); }, 8000); }
   });
   var box = document.createElement("div");
@@ -61,14 +64,62 @@
     var f = p.standard || p.thumbnail || p.large || p.original || {};
     return f.url || "";
   }
+  function pictures(o) {
+    return list(o.images && (o.images.items || o.images)).map(function (i) {
+      var f = (i && (i.large || i.standard || i.original || i.thumbnail)) || {};
+      return typeof i === "string" ? i : f.url;
+    }).filter(Boolean);
+  }
+  function downloads(o) {
+    var archives = list(o.archives).filter(function (a) { return a && a.download_url; })
+      .map(function (a) { return { url: a.download_url, name: String(a.path || "").split("/").pop() }; });
+    if (archives.length) return archives;
+    if (o.archive_download_url) return [{ url: o.archive_download_url, name: "" }];
+    return list(o.files && (o.files.items || o.files)).filter(function (f) { return f && f.download_url; })
+      .map(function (f) { return { url: f.download_url, name: f.filename || "" }; });
+  }
   function slim(o, source, collection) {
     var pledge = list(o.pledges && (o.pledges.items || o.pledges))[0];
     return {
+      images: pictures(o), downloads: downloads(o),
       id: o.id, name: o.name, source: source,
       collection: collection || (pledge && pledge.name) || "",
       creator: o.user_name || o.username || (o.designer && (o.designer.name || o.designer.username)) || "",
       creator_url: o.user_url || "", url: o.absolute_url || o.url || o.show_url || "", image: picture(o)
     };
+  }
+
+  function fileName(r, url, given, fallback) {
+    var cd = r.headers.get("Content-Disposition") || "";
+    var m = /filename\*=UTF-8''([^;]+)/i.exec(cd) || /filename="?([^";]+)"?/i.exec(cd);
+    var name = m ? decodeURIComponent(m[1]) : given || decodeURIComponent(new URL(r.url || url, location.href).pathname.split("/").pop());
+    return (name || fallback).replace(/[\\/:*?"<>|]+/g, "-");
+  }
+  // Downloads each queued item with the user's login and passes the files to the
+  // Resin Models window, which uploads them into the library folder it chose.
+  async function download(items) {
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i], links = it.downloads && it.downloads.length ? it.downloads : [{ url: "/download/" + it.id, name: "" }];
+      var got = 0, note = "";
+      for (var j = 0; j < links.length; j++) {
+        try {
+          say("Downloading " + it.name + (links.length > 1 ? " (" + (j + 1) + " of " + links.length + ")" : "") + "…");
+          var r = await fetch(links[j].url, { credentials: "include" });
+          if (/\/login/.test(r.url)) throw new Error("not logged in");
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          if (/text\/html/.test(r.headers.get("Content-Type") || "")) throw new Error("MyMiniFactory sent a web page instead of a file");
+          var blob = await r.blob();
+          send({ type: "mmf-file", id: it.id, folder: it.folder, depth: it.depth,
+                 name: fileName(r, links[j].url, links[j].name, it.name + ".zip"), blob: blob });
+          got++;
+        } catch (err) {
+          note = (err && err.message) || String(err);
+          if (/Failed to fetch|NetworkError|Load failed/.test(note)) note = "MyMiniFactory didn't let the bookmark read the download";
+        }
+      }
+      send({ type: "mmf-item-done", id: it.id, ok: got === links.length, note: got === links.length ? "" : note });
+    }
+    send({ type: "mmf-downloads-done" });
   }
 
   (async function () {

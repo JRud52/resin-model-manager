@@ -91,16 +91,16 @@ groups them by **release** and **model**, separates **supported** and
   cleaned up. Previews render in the background after an import (model covers
   first), and on demand when you open something not rendered yet. For LYS/CTX
   files the app shows an embedded thumbnail when the file has one.
-* **Bundled preview pictures.** JPG, PNG, WebP, GIF and BMP pictures that come
+* **Bundled preview images.** JPG, PNG, WebP, GIF and BMP images that come
   with a release or model (loose, or inside its `.zip` / `.7z`) are indexed and
-  shown before rendered STL previews. A picture inside a model's folder belongs
-  to that model. Otherwise a picture whose name, or a folder it sits in, names a
+  shown before rendered STL previews. An image inside a model's folder belongs
+  to that model. Otherwise an image whose name, or a folder it sits in, names a
   model belongs to it, even with extra words around the name
   (`Knight_front.jpg`, `DL_RedDragon_Promo.jpg`, `Images/Knight/01.jpg`,
-  `02_rat_trooper_painted.png`). Anything else is a release picture, shown above
+  `02_rat_trooper_painted.png`). Anything else is a release image, shown above
   the models when the release is selected; in a release with only one model it
-  is also that model's cover. Pictures named `cover`, `main`, `promo` or
-  `preview` are picked first. If a picture lands in the wrong place, open it and
+  is also that model's cover. Images named `cover`, `main`, `promo` or
+  `preview` are picked first. If an image lands in the wrong place, open it and
   pick the model it belongs to (or *Whole release*) under *Belongs to*; this is
   saved as a correction rule.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
@@ -110,9 +110,12 @@ groups them by **release** and **model**, separates **supported** and
   gives you a bookmark to drag to your bookmarks bar. Click it on
   myminifactory.com while logged in: it reads your library the way the site's
   own Library page does and sends the list to a Resin Models window it opens.
-  Items are listed with their picture, creator, campaign or tribe and a link to
-  MyMiniFactory; nothing is downloaded and your MyMiniFactory login is never
-  stored. Items whose name matches a local release or model are marked *in your
+  Items are listed with their images, creator, campaign or tribe and a link to
+  MyMiniFactory, and open in the model window like your own models. *Download to
+  library* in that window marks an item; the next time you click the bookmark on
+  myminifactory.com it downloads the marked items with your login and the Resin
+  Models window it opens saves them into the library as Creator / Item. Your
+  MyMiniFactory login is never stored by the app. Items whose name matches a local release or model are marked *in your
   library*; *Not in your library* lists the rest. Searching shows matching
   MyMiniFactory items above the local results. If the bookmark can't reach the
   Resin Models window it saves `myminifactory-library.json` instead, which you

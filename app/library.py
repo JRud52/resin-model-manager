@@ -92,7 +92,7 @@ def upload_target(rel: str) -> Path:
     if not parts or any(p == ".." or p.startswith(".") for p in parts):
         raise ValueError("invalid path")
     if os.path.splitext(parts[-1])[1].lower() not in UPLOAD_EXTS:
-        raise ValueError(f"{parts[-1]}: not a model file, picture or .zip/.7z archive")
+        raise ValueError(f"{parts[-1]}: not a model file, image or .zip/.7z archive")
     lib = config.LIBRARY_DIR.resolve()
     target = lib.joinpath(*parts).resolve()
     if not target.is_relative_to(lib):
