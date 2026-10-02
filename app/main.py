@@ -224,9 +224,11 @@ def model_detail(model_id: str, include_hidden: bool = False):
     if not rows:
         raise HTTPException(404)
     covers = library.cover_file_ids([model_id])
+    main_file = library.main_file_ids([model_id]).get(model_id)
     return {
         "id": model_id, "model": rows[0]["model"], "release": rows[0]["release"], "creator": rows[0]["creator"],
         "cover": covers.get(model_id),
+        "main_file": main_file,
         "images": library.model_images(model_id, rows[0]["release"]),
         "tags": _tags_for([model_id])[model_id],
         "roots": sorted({r["model_root"] for r in rows}),
@@ -262,6 +264,7 @@ class MainPictureIn(BaseModel):
     kind: str                       # release | model
     key: str                        # release name or model id
     image_id: Optional[int] = None  # None goes back to the automatic pick
+    file_id: Optional[int] = None   # model only: a file's rendered preview instead of an image
 
 
 @app.put("/api/main-picture")
@@ -269,8 +272,10 @@ def main_picture(m: MainPictureIn):
     """Pick the picture shown first for a release or a model."""
     if m.kind not in ("release", "model") or not m.key:
         raise HTTPException(400, "kind must be release or model, with a key")
+    if m.file_id is not None and m.kind != "model":
+        raise HTTPException(400, "Only a model's main image can be a file preview")
     try:
-        library.set_main_picture(m.kind, m.key, m.image_id)
+        library.set_main_picture(m.kind, m.key, m.image_id, m.file_id)
     except KeyError:
         raise HTTPException(404, "No such picture")
     return {"ok": True}

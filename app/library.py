@@ -813,13 +813,27 @@ def main_picture_ids(kind: str, keys: list[str]) -> dict[str, int]:
     return out
 
 
-def set_main_picture(kind: str, key: str, image_id: int | None):
-    """Pick (or with None, un-pick) the main picture of a release or model."""
+def main_file_ids(model_ids: list[str]) -> dict[str, int]:
+    """Files (an option's rendered preview) picked in the app as a model's main image."""
+    out: dict[str, int] = {}
+    q = ("SELECT m.key, MIN(f.id) id FROM main_pictures m JOIN files f ON f.logical_path = m.path "
+         "AND f.hidden=0 AND f.preview NOT IN ('none', 'error') WHERE m.kind = 'model' AND m.key IN (%s) "
+         "GROUP BY m.key")
+    lower = {k.lower(): k for k in model_ids}
+    for r in _ids_in_chunks(q, model_ids):
+        out[lower.get(r["key"].lower(), r["key"])] = r["id"]
+    return out
+
+
+def set_main_picture(kind: str, key: str, image_id: int | None, file_id: int | None = None):
+    """Pick (or with neither id, un-pick) the main picture of a release or model.
+    A model's main picture can also be one of its files' rendered previews."""
     c = db.conn()
-    if image_id is None:
+    if image_id is None and file_id is None:
         c.execute("DELETE FROM main_pictures WHERE kind=? AND key=?", (kind, key))
     else:
-        row = c.execute("SELECT logical_path FROM images WHERE id=?", (image_id,)).fetchone()
+        row = (c.execute("SELECT logical_path FROM images WHERE id=?", (image_id,)).fetchone() if file_id is None
+               else c.execute("SELECT logical_path FROM files WHERE id=?", (file_id,)).fetchone())
         if not row:
             raise KeyError(image_id)
         c.execute("INSERT OR REPLACE INTO main_pictures(kind, key, path) VALUES (?,?,?)",
@@ -829,8 +843,10 @@ def set_main_picture(kind: str, key: str, image_id: int | None):
 
 def cover_image_ids(model_ids: list[str]) -> dict[str, int]:
     """Best bundled picture per model: the one picked in the app, then its own
-    pictures before release ones."""
+    pictures before release ones. Models whose main image is a file's preview get none."""
     out: dict[str, int] = main_picture_ids("model", model_ids)
+    skip = main_file_ids(model_ids)
+    model_ids = [m for m in model_ids if m not in skip]
     q = ("SELECT model_id, id FROM images WHERE hidden=0 AND preview != 'error' AND model_id IN (%s) "
          "ORDER BY model_id, scope != 'model', rank, name COLLATE NOCASE")
     for r in _ids_in_chunks(q, model_ids):
@@ -987,7 +1003,8 @@ def _render_rows(rows):
 
 
 def cover_file_ids(model_ids: list[str] | None = None) -> dict[str, int]:
-    """Pick one file per model for its card: an unsupported STL, biggest first."""
+    """Pick one file per model for its card: the one picked in the app as main
+    image, else an unsupported STL, biggest first."""
     c = db.conn()
     q = ("SELECT model_id, id FROM files WHERE hidden=0 {where} "
          "ORDER BY model_id, (preview IN ('none','error')), (ext != '.stl'), "
@@ -996,12 +1013,20 @@ def cover_file_ids(model_ids: list[str] | None = None) -> dict[str, int]:
     if model_ids is None:
         for r in c.execute(q.format(where="")):
             out.setdefault(r["model_id"], r["id"])
+        out.update(_all_main_files(c))
         return out
     for i in range(0, len(model_ids), 500):
         chunk = model_ids[i:i + 500]
         for r in c.execute(q.format(where="AND model_id IN (%s)" % ",".join("?" * len(chunk))), chunk):
             out.setdefault(r["model_id"], r["id"])
+    out.update(main_file_ids(model_ids))
     return out
+
+
+def _all_main_files(c) -> dict[str, int]:
+    return {r["key"]: r["id"] for r in c.execute(
+        "SELECT m.key, MIN(f.id) id FROM main_pictures m JOIN files f ON f.logical_path = m.path "
+        "AND f.hidden=0 WHERE m.kind = 'model' GROUP BY m.key")}
 
 
 preview_state = {"current": None}

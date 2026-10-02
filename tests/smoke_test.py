@@ -119,6 +119,16 @@ assert cover == rd["images"][0]["id"], "model main picture is the card cover"
 assert get("/api/releases/images?release=Dragon%20Lords")[0]["name"] == "Knight_front.jpg", "kept after re-index"
 put_json("/api/main-picture", {"kind": "release", "key": "Dragon Lords", "image_id": None})
 put_json("/api/main-picture", {"kind": "model", "key": rd["id"], "image_id": None})
+# A file's rendered preview (e.g. one option) as the model's main image.
+stl = next(f for f in rd["files"] if f["ext"] == ".stl" and f["id"] != rd["cover"])
+put_json("/api/main-picture", {"kind": "model", "key": rd["id"], "file_id": stl["id"]})
+rd = get(f"/api/models/{models['Red Dragon']['id']}")
+assert rd["main_file"] == stl["id"] and rd["cover"] == stl["id"] and not any(i["main_model"] for i in rd["images"])
+card = next(m for m in get("/api/models?release=Dragon%20Lords")["items"] if m["model"] == "Red Dragon")
+assert card["cover"] == stl["id"] and card["cover_image"] is None, card
+put_json("/api/main-picture", {"kind": "model", "key": rd["id"], "file_id": None})
+card = next(m for m in get("/api/models?release=Dragon%20Lords")["items"] if m["model"] == "Red Dragon")
+assert card["cover_image"] and get(f"/api/models/{rd['id']}")["main_file"] is None
 assert [i["name"] for i in get("/api/releases/images?release=Dragon%20Lords")] == ["Dragon Lords Cover.jpg"]
 print("bundled pictures ok")
 

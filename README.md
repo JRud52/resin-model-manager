@@ -106,7 +106,9 @@ groups them by **release** and **model**, separates **supported** and
   In a model's image list, ☆ makes an image the model's main image (shown on
   its card and first in its window), and *Release* makes it the release's main
   image (shown first, larger, above the release's models). Click again to undo.
-  Both choices are kept across re-indexing.
+  The ☆ next to a file does the same with that file's rendered preview, so one
+  option or part can be the model's main image.
+  These choices are kept across re-indexing.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
 * **Your MyMiniFactory library.** MyMiniFactory has no API for a user's
