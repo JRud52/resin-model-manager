@@ -136,7 +136,7 @@ async function loadReleaseImages() {
   const imgs = release === null ? [] : await api(`/api/releases/images?release=${encodeURIComponent(release)}`);
   if (release !== state.release) return;
   state.releaseImages = imgs;
-  el.innerHTML = `<div class="side-title">Release pictures</div><div class="strip">` + imgs.map((i) => `<button class="rimg" data-pic="${i.id}" title="${esc(i.path)}">
+  el.innerHTML = `<div class="side-title">Release images</div><div class="strip">` + imgs.map((i) => `<button class="rimg" data-pic="${i.id}" title="${esc(i.path)}">
     <img loading="lazy" src="/api/images/${i.id}/preview" alt="${esc(i.name)}" onerror="this.parentElement.remove()"></button>`).join("") + `</div>`;
   el.classList.toggle("hidden", !imgs.length);
 }
@@ -361,7 +361,7 @@ async function openMmfModel(id) {
   $("#editForm").classList.add("hidden");
   $("#mFilter").innerHTML = "";
   renderMmfModel();
-  if (m.images.length) showMmfPicture(0); else { $("#mPreview").style.visibility = "hidden"; $("#mPreviewName").textContent = "No pictures"; }
+  if (m.images.length) showMmfPicture(0); else { $("#mPreview").style.visibility = "hidden"; $("#mPreviewName").textContent = "No images"; }
   if (!dlg.open) dlg.showModal();
 }
 
@@ -384,8 +384,8 @@ function renderMmfModel() {
         <a class="badge link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Open on MyMiniFactory ↗</a></div>
       ${dl}${note}
     </div>
-    <div class="group-title">Pictures (${m.images.length})</div>
-    <div class="mmf-pics">${m.images.map((u, i) => `<button data-mmf-pic="${i}" title="Picture ${i + 1}">
+    <div class="group-title">Images (${m.images.length})</div>
+    <div class="mmf-pics">${m.images.map((u, i) => `<button data-mmf-pic="${i}" title="Image ${i + 1}">
       <img loading="lazy" referrerpolicy="no-referrer" src="${esc(u)}" alt="" onerror="this.parentElement.remove()"></button>`).join("")}</div>`;
   markMmfPic();
 }
@@ -397,7 +397,7 @@ function showMmfPicture(i) {
   img.style.visibility = "visible";
   img.src = state.mmfItem.images[i];
   img.onerror = () => { img.style.visibility = "hidden"; };
-  $("#mPreviewName").textContent = `Picture ${i + 1} of ${state.mmfItem.images.length}`;
+  $("#mPreviewName").textContent = `Image ${i + 1} of ${state.mmfItem.images.length}`;
   markMmfPic();
 }
 function markMmfPic() {
@@ -694,13 +694,13 @@ function renderFiles() {
     return oa.localeCompare(ob) || rank[sa] - rank[sb];
   });
   // Collapsed by default (rebuilt on every open); the main preview still shows the first picture.
-  const pics = m.images.length ? `<details class="pics"><summary class="group-title">Pictures (${m.images.length})</summary>` + m.images.map((i) => `
+  const pics = m.images.length ? `<details class="pics"><summary class="group-title">Images (${m.images.length})</summary>` + m.images.map((i) => `
       <div class="file" data-img="${i.id}">
         <img loading="lazy" class="photo" src="/api/images/${i.id}/preview" onerror="this.outerHTML='<div class=noimg>IMG</div>'">
         <div class="fname"><div title="${esc(i.path)}">${esc(i.name)}</div>
-          <div class="muted small">${i.scope === "release" ? "Release picture" : "Model picture"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
+          <div class="muted small">${i.scope === "release" ? "Release image" : "Model image"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
         <a href="/api/images/${i.id}/full" target="_blank" rel="noopener" title="Open full size">↗</a>
-        <button data-pic-edit="${i.id}" title="Choose which model this picture belongs to">✎</button>
+        <button data-pic-edit="${i.id}" title="Choose which model this image belongs to">✎</button>
       </div>`).join("") + `</details>` : "";
   $("#mFiles").innerHTML = pics + keys.map((k) => {
     const [opt, sup] = k.split("\u0000");
@@ -1029,7 +1029,7 @@ $("#rulesBtn").onclick = async () => {
   $("#rulesTable").innerHTML = rules.length ? `<tr><th>Path</th><th>Change</th><th></th></tr>` + rules.map((r) => {
     const ch = [];
     if (r.release != null) ch.push(`release → ${esc(r.release)}`);
-    if (r.model != null) ch.push(r.model === "" ? "picture → whole release" : `model → ${esc(r.model)}`);
+    if (r.model != null) ch.push(r.model === "" ? "image → whole release" : `model → ${esc(r.model)}`);
     if (r.option != null) ch.push(`option → ${esc(r.option)}`);
     if (r.creator != null) ch.push(`creator → ${esc(r.creator)}`);
     if (r.supported != null) ch.push(sup[r.supported]);
@@ -1147,8 +1147,8 @@ function renderQueue(msg) {
   const q = upload.queue;
   const total = q.reduce((n, it) => n + it.file.size, 0);
   $("#uploadQueue").textContent = msg ?? (q.length
-    ? `${q.length} file${q.length > 1 ? "s" : ""} ready (${fmtSize(total)})${upload.skipped ? `, ${upload.skipped} ignored (not model files, pictures or archives)` : ""}.`
-    : upload.skipped ? `${upload.skipped} ignored (not model files, pictures or archives).` : "");
+    ? `${q.length} file${q.length > 1 ? "s" : ""} ready (${fmtSize(total)})${upload.skipped ? `, ${upload.skipped} ignored (not model files, images or archives)` : ""}.`
+    : upload.skipped ? `${upload.skipped} ignored (not model files, images or archives).` : "");
   $("#uploadBtn").disabled = upload.busy || !q.length;
   $("#clearQueue").disabled = upload.busy || !q.length;
 }
