@@ -91,6 +91,8 @@
       <form id="editForm" class="hidden card-form">
         <label>Model name <input name="model"></label>
         <label>Release <input name="release" list="releaseList"></label>
+        <label><span>Creator · applies to the whole release</span>
+          <input name="creator" list="creatorOptions" autocomplete="off" placeholder="Blank goes back to the folder guess"></label>
         <p class="muted small">Renaming to an existing model name in the same release merges them.
           Changes are stored as correction rules and survive new imports; your files are never renamed.</p>
         <div class="row">
