@@ -514,6 +514,29 @@ $("#search").addEventListener("input", (e) => {
 $("#supFilter").onchange = (e) => { state.sup = e.target.value; loadModels(); };
 $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
 
+// Sidebar width: drag the handle on its right edge; remembered in this browser only.
+(() => {
+  const handle = $("#sideResize"), layout = $("#layout");
+  const setW = (w) => layout.style.setProperty("--side-w", Math.max(180, Math.min(600, w)) + "px");
+  try { const w = +localStorage.getItem("sideWidth"); if (w) setW(w); } catch {}
+  const save = () => { try { localStorage.setItem("sideWidth", parseInt($("#sidebar").offsetWidth)); } catch {} };
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging"); document.body.classList.add("resizing");
+    const move = (ev) => setW(ev.clientX - $("#sidebar").getBoundingClientRect().left);
+    const up = () => {
+      handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up);
+      handle.classList.remove("dragging"); document.body.classList.remove("resizing"); save();
+    };
+    handle.addEventListener("pointermove", move); handle.addEventListener("pointerup", up);
+  });
+  handle.addEventListener("dblclick", () => {
+    layout.style.removeProperty("--side-w");
+    try { localStorage.removeItem("sideWidth"); } catch {}
+  });
+})();
+
 // ------------------------------------------------------------ model dialog
 
 const supLabel = (s) => (s === true ? "Supported" : s === false ? "Unsupported" : "Other files");
