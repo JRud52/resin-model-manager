@@ -469,6 +469,7 @@ $("#mEditBtn").onclick = () => {
   const f = $("#editForm");
   f.model.value = state.model.model;
   f.release.value = state.model.release;
+  f.creator.value = state.model.creator || "";
   f.classList.toggle("hidden");
 };
 $("#cancelEdit").onclick = () => $("#editForm").classList.add("hidden");
@@ -478,10 +479,19 @@ $("#editForm").onsubmit = async (e) => {
   const body = { prefixes: state.model.roots, from_model_id: state.model.id };
   if (f.model.value.trim() && f.model.value.trim() !== state.model.model) body.model = f.model.value.trim();
   if (f.release.value.trim() && f.release.value.trim() !== state.model.release) body.release = f.release.value.trim();
-  if (!body.model && !body.release) { f.classList.add("hidden"); return; }
-  if (!body.model) body.model = state.model.model;
-  if (!body.release) body.release = state.model.release;
-  await api("/api/overrides", { method: "POST", body: JSON.stringify(body) });
+  const creator = f.creator.value.trim();
+  const creatorChanged = creator !== (state.model.creator || "");
+  if (!body.model && !body.release && !creatorChanged) { f.classList.add("hidden"); return; }
+  if (body.model || body.release) {
+    if (!body.model) body.model = state.model.model;
+    if (!body.release) body.release = state.model.release;
+    await api("/api/overrides", { method: "POST", body: JSON.stringify(body) });
+  }
+  // The creator belongs to the release the model ends up in.
+  if (creatorChanged) {
+    await api("/api/releases/creator", { method: "POST",
+      body: JSON.stringify({ releases: [body.release || state.model.release], creator }) });
+  }
   $("#modelDlg").close();
   refresh();
 };

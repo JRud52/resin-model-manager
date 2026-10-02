@@ -50,7 +50,8 @@ groups them by **release** and **model**, separates **supported** and
   (several tags = models that have all of them). The search box also matches
   tags; `tag:painted` matches that tag exactly. Tags follow a model when you
   rename or merge it.
-* **Creators.** With a release selected, *Set creator* names who made it. *Edit*
+* **Creators.** With a release selected, *Set creator* names who made it (or
+  use the Creator field in a model's *Edit* form, which sets it for that model's release). *Edit*
   next to Creators in the sidebar sets the creator of many releases at once
   (filter the list, tick releases, save). The Import dialog has an optional
   Creator field: uploads with a creator go into that creator's folder in the
