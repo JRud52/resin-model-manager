@@ -136,7 +136,7 @@ async function loadReleaseImages() {
   const imgs = release === null ? [] : await api(`/api/releases/images?release=${encodeURIComponent(release)}`);
   if (release !== state.release) return;
   state.releaseImages = imgs;
-  el.innerHTML = `<div class="side-title">Release images</div><div class="strip">` + imgs.map((i) => `<button class="rimg" data-pic="${i.id}" title="${esc(i.path)}">
+  el.innerHTML = `<div class="side-title">Release images</div><div class="strip">` + imgs.map((i) => `<button class="rimg ${i.main ? "main" : ""}" data-pic="${i.id}" title="${esc(i.path)}">
     <img loading="lazy" src="/api/images/${i.id}/preview" alt="${esc(i.name)}" onerror="this.parentElement.remove()"></button>`).join("") + `</div>`;
   el.classList.toggle("hidden", !imgs.length);
 }
@@ -152,6 +152,11 @@ async function openPicture(pic) {
   $("#lightboxName").textContent = pic.name;
   const sel = $("#lightboxModel");
   sel.innerHTML = `<option value="">Whole release</option>`;
+  // "Main for model" only makes sense from a model's window.
+  const fromModel = $("#modelDlg").open && state.model;
+  $("#lbMainModel").classList.toggle("hidden", !fromModel);
+  $("#lbMainModel").classList.toggle("on", !!(fromModel && pic.main_model));
+  $("#lbMainRelease").classList.toggle("on", !!(pic.main_release || pic.main));
   $("#lightbox").showModal();
   const res = await api(`/api/models?${new URLSearchParams({ release: pic.release, limit: 1000 })}`);
   if (state.picture !== pic) return;
@@ -160,6 +165,24 @@ async function openPicture(pic) {
   sel.models = res.items;
 }
 $("#lightbox").addEventListener("click", (e) => { if (!e.target.closest(".lb-bar")) $("#lightbox").close(); });
+
+// Pick (or un-pick, when it already is) the picture shown first for a release or a model.
+async function setMainPicture(kind, pic, on) {
+  const key = kind === "model" ? state.model.id : (state.model && $("#modelDlg").open ? state.model.release : pic.release);
+  await api("/api/main-picture", { method: "PUT", body: JSON.stringify({ kind, key, image_id: on ? pic.id : null }) });
+  refresh();
+  if ($("#modelDlg").open) { try { await openModel(state.model.id); } catch { $("#modelDlg").close(); } }
+}
+$("#lbMainModel").onclick = async (e) => {
+  const on = !e.target.classList.contains("on");
+  await setMainPicture("model", state.picture, on);
+  e.target.classList.toggle("on", on);
+};
+$("#lbMainRelease").onclick = async (e) => {
+  const on = !e.target.classList.contains("on");
+  await setMainPicture("release", state.picture, on);
+  e.target.classList.toggle("on", on);
+};
 $("#lightboxModel").addEventListener("change", async (e) => {
   const pic = state.picture;
   const m = e.target.models.find((x) => x.id === e.target.value);
@@ -700,7 +723,8 @@ function renderFiles() {
         <div class="fname"><div title="${esc(i.path)}">${esc(i.name)}</div>
           <div class="muted small">${i.scope === "release" ? "Release image" : "Model image"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
         <a href="/api/images/${i.id}/full" target="_blank" rel="noopener" title="Open full size">↗</a>
-        <button data-pic-edit="${i.id}" title="Choose which model this image belongs to">✎</button>
+        <button data-pic-main="${i.id}" class="star ${i.main_release ? "on" : ""}" title="${i.main_release ? "Main image of the release (click to unset)" : "Use as the release's main image"}">${i.main_release ? "★" : "☆"}</button>
+        <button data-pic-edit="${i.id}" title="Choose which model this image belongs to, or make it the main image">✎</button>
       </div>`).join("") + `</details>` : "";
   $("#mFiles").innerHTML = pics + keys.map((k) => {
     const [opt, sup] = k.split("\u0000");
@@ -778,6 +802,12 @@ $("#mFiles").addEventListener("click", (e) => {
   }
   const edit = e.target.closest("[data-edit]");
   if (edit) { openFileEdit(state.model.files.find((f) => f.id === +edit.dataset.edit)); return; }
+  const picMain = e.target.closest("[data-pic-main]");
+  if (picMain) {
+    const pic = state.model.images.find((i) => i.id === +picMain.dataset.picMain);
+    setMainPicture("release", pic, !pic.main_release).then(() => { const d = $(".pics"); if (d) d.open = true; });
+    return;
+  }
   const picEdit = e.target.closest("[data-pic-edit]");
   if (picEdit) { openPicture(state.model.images.find((i) => i.id === +picEdit.dataset.picEdit)); return; }
   const pic = e.target.closest("[data-img]");

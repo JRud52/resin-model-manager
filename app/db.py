@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS model_tags (
 );
 CREATE INDEX IF NOT EXISTS model_tags_tag ON model_tags(tag);
 
+-- Picture chosen in the app as the main picture of a release (key = release
+-- name) or of a model (key = model_id). Stored by the picture's logical path so
+-- it survives re-indexing; if the picture disappears the automatic pick is used.
+CREATE TABLE IF NOT EXISTS main_pictures (
+    kind TEXT NOT NULL,              -- release | model
+    key TEXT NOT NULL COLLATE NOCASE,
+    path TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+
 -- Creator set for a release from the app. Wins over the folder guess and import
 -- rules, and survives re-indexing because it is keyed on the release name.
 CREATE TABLE IF NOT EXISTS release_creators (

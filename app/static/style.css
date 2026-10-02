@@ -139,6 +139,13 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 #releaseImages .strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
 .rimg { padding: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #16191d; flex-shrink: 0; cursor: zoom-in; }
 .rimg:hover { border-color: var(--accent); }
+.rimg { position: relative; }
+.rimg.main { border-color: var(--accent); }
+.rimg.main::after { content: "Main"; position: absolute; left: 6px; top: 6px; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--accent); color: #0b1220; }
+.rimg.main img { height: 200px; max-width: 400px; }
+.file button.star { color: var(--muted); }
+.file button.star.on { color: #f2c94c; }
+#lightbox .lb-bar button.on { background: var(--accent); color: #0b1220; border-color: var(--accent); }
 .rimg img { display: block; height: 160px; width: auto; max-width: 320px; object-fit: cover; }
 #lightbox { padding: 8px; width: fit-content; min-width: 420px; max-width: 95vw; max-height: 95vh; cursor: zoom-out; }
 #lightbox img { display: block; max-width: calc(95vw - 16px); max-height: calc(95vh - 48px); object-fit: contain; }

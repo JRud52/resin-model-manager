@@ -802,9 +802,35 @@ def _ids_in_chunks(q: str, ids: list[str]):
         yield from c.execute(q % ",".join("?" * len(chunk)), chunk)
 
 
-def cover_image_ids(model_ids: list[str]) -> dict[str, int]:
-    """Best bundled picture per model: its own pictures before release ones."""
+def main_picture_ids(kind: str, keys: list[str]) -> dict[str, int]:
+    """Pictures picked in the app as the main picture of a release or model."""
     out: dict[str, int] = {}
+    q = ("SELECT m.key, MIN(i.id) id FROM main_pictures m JOIN images i ON i.logical_path = m.path "
+         "AND i.hidden=0 AND i.preview != 'error' WHERE m.kind = '%s' AND m.key IN (%%s) GROUP BY m.key" % kind)
+    lower = {k.lower(): k for k in keys}
+    for r in _ids_in_chunks(q, keys):
+        out[lower.get(r["key"].lower(), r["key"])] = r["id"]
+    return out
+
+
+def set_main_picture(kind: str, key: str, image_id: int | None):
+    """Pick (or with None, un-pick) the main picture of a release or model."""
+    c = db.conn()
+    if image_id is None:
+        c.execute("DELETE FROM main_pictures WHERE kind=? AND key=?", (kind, key))
+    else:
+        row = c.execute("SELECT logical_path FROM images WHERE id=?", (image_id,)).fetchone()
+        if not row:
+            raise KeyError(image_id)
+        c.execute("INSERT OR REPLACE INTO main_pictures(kind, key, path) VALUES (?,?,?)",
+                  (kind, key, row["logical_path"]))
+    c.commit()
+
+
+def cover_image_ids(model_ids: list[str]) -> dict[str, int]:
+    """Best bundled picture per model: the one picked in the app, then its own
+    pictures before release ones."""
+    out: dict[str, int] = main_picture_ids("model", model_ids)
     q = ("SELECT model_id, id FROM images WHERE hidden=0 AND preview != 'error' AND model_id IN (%s) "
          "ORDER BY model_id, scope != 'model', rank, name COLLATE NOCASE")
     for r in _ids_in_chunks(q, model_ids):
@@ -818,16 +844,29 @@ def _image_dict(r):
             "archive": r["rel_path"] if r["member"] else None, "size": r["size"]}
 
 
-def model_images(model_id: str) -> list[dict]:
+def model_images(model_id: str, release: str = "") -> list[dict]:
+    """A model's pictures, its main picture first. `main_model` / `main_release`
+    flag the pictures picked as main for the model and for its release."""
     rows = db.conn().execute("SELECT * FROM images WHERE model_id=? AND hidden=0 AND preview != 'error' "
                              "ORDER BY scope != 'model', rank, name COLLATE NOCASE", (model_id,)).fetchall()
-    return [_image_dict(r) for r in rows]
+    main_model = main_picture_ids("model", [model_id]).get(model_id)
+    main_release = main_picture_ids("release", [release]).get(release) if release else None
+    out = [{**_image_dict(r), "main_model": r["id"] == main_model, "main_release": r["id"] == main_release}
+           for r in rows]
+    return sorted(out, key=lambda d: not d["main_model"])
 
 
 def release_images(release: str) -> list[dict]:
-    rows = db.conn().execute("SELECT * FROM images WHERE release=? AND scope='release' AND hidden=0 "
-                             "AND preview != 'error' ORDER BY rank, name COLLATE NOCASE", (release,)).fetchall()
-    return [_image_dict(r) for r in rows]
+    """A release's pictures, its main picture first. The main picture may be one
+    of its models' pictures, picked from the model window."""
+    c = db.conn()
+    rows = c.execute("SELECT * FROM images WHERE release=? AND scope='release' AND hidden=0 "
+                     "AND preview != 'error' ORDER BY rank, name COLLATE NOCASE", (release,)).fetchall()
+    main = main_picture_ids("release", [release]).get(release)
+    out = [{**_image_dict(r), "main": r["id"] == main} for r in rows if r["id"] != main]
+    if main:
+        out.insert(0, {**_image_dict(c.execute("SELECT * FROM images WHERE id=?", (main,)).fetchone()), "main": True})
+    return out
 
 
 # ---------------------------------------------------------------- previews

@@ -93,6 +93,33 @@ for o in get("/api/overrides"):
     if o["prefix"] in (cover, "Dragon Lords/Images/Knight/01.jpg"):
         urllib.request.urlopen(urllib.request.Request(f"{BASE}/api/overrides/{o['id']}", method="DELETE"))
 assert [i["name"] for i in get("/api/releases/images?release=Dragon%20Lords")] == ["Dragon Lords Cover.jpg"]
+# Main pictures picked in the app: any model picture as the release's main one,
+# and a model's own main picture. Both survive re-indexing.
+def put_json(u, body):
+    req = urllib.request.Request(BASE + u, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="PUT")
+    return json.load(urllib.request.urlopen(req))
+kn = get(f"/api/models/{models['Knight']['id']}")
+front = next(i for i in kn["images"] if i["name"] == "Knight_front.jpg")
+put_json("/api/main-picture", {"kind": "release", "key": "Dragon Lords", "image_id": front["id"]})
+rel = get("/api/releases/images?release=Dragon%20Lords")
+assert [(i["name"], i["main"]) for i in rel] == [("Knight_front.jpg", True), ("Dragon Lords Cover.jpg", False)], rel
+assert next(i for i in get(f"/api/models/{models['Knight']['id']}")["images"] if i["id"] == front["id"])["main_release"]
+rd = get(f"/api/models/{models['Red Dragon']['id']}")
+render = next(i for i in rd["images"] if i["name"] == "Red_Dragon_render.png")
+assert rd["images"][0]["name"] != "Red_Dragon_render.png"
+put_json("/api/main-picture", {"kind": "model", "key": rd["id"], "image_id": render["id"]})
+post("/api/index")
+time.sleep(0.5)
+wait_job()
+rd = get(f"/api/models/{models['Red Dragon']['id']}")
+assert rd["images"][0]["name"] == "Red_Dragon_render.png" and rd["images"][0]["main_model"], rd["images"]
+cover = next(m for m in get("/api/models?release=Dragon%20Lords")["items"] if m["model"] == "Red Dragon")["cover_image"]
+assert cover == rd["images"][0]["id"], "model main picture is the card cover"
+assert get("/api/releases/images?release=Dragon%20Lords")[0]["name"] == "Knight_front.jpg", "kept after re-index"
+put_json("/api/main-picture", {"kind": "release", "key": "Dragon Lords", "image_id": None})
+put_json("/api/main-picture", {"kind": "model", "key": rd["id"], "image_id": None})
+assert [i["name"] for i in get("/api/releases/images?release=Dragon%20Lords")] == ["Dragon Lords Cover.jpg"]
 print("bundled pictures ok")
 
 # Downloads straight out of archives.
