@@ -251,6 +251,39 @@ except urllib.error.HTTPError as e:
 put_settings({"preferred_format": "stl", "preferred_support": "supported"})
 print("preferences ok")
 
+# Folder mappings: say which folder levels are release / model for a whole folder, with a preview,
+# tags following the regrouped models, and removal going back to the automatic guess.
+def send(method, u, body=None):
+    req = urllib.request.Request(BASE + u, data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method=method)
+    return json.load(urllib.request.urlopen(req))
+
+
+ef = "/api/models?release=Explorers%20Fellowship"
+old = get(ef)["items"]
+assert [m["model"] for m in old] == ["Bite The Bullet"], old
+post(f"/api/models/{old[0]['id']}/tags", {"add": ["explorers"]})
+s = get("/api/maps/suggest?path=" + urllib.parse.quote("Explorers Fellowship/Bite The Bullet/Elf Scout/Elf_Scout.stl"))
+assert s == {"roles": ["release", "model"], "map": None}, s
+m = {"prefix": "Explorers Fellowship", "roles": ["release", "ignore", "model", "auto"]}
+pv = post("/api/maps/preview", m)
+assert pv["files"] == 2 and [g["model"] for g in pv["before"]] == ["Bite The Bullet"], pv
+assert [g["model"] for g in pv["after"]] == ["Dwarf Ranger", "Elf Scout"], pv
+for bad in (["ignore", "model"], ["release", "creator"], ["release", "model", "release"]):
+    try:
+        post("/api/maps/preview", {"prefix": "Explorers Fellowship", "roles": bad})
+        raise SystemExit(f"roles {bad} accepted")
+    except urllib.error.HTTPError as e:
+        assert e.code == 400
+post("/api/maps", m)
+assert [(x["model"], x["tags"]) for x in get(ef)["items"]] == [("Dwarf Ranger", ["explorers"]), ("Elf Scout", ["explorers"])]
+maps = get("/api/maps")
+assert [(x["prefix"], x["roles"], x["files"]) for x in maps] == [("Explorers Fellowship", ["release", "ignore", "model"], 2)], maps
+assert get("/api/maps/suggest?path=" + urllib.parse.quote("Explorers Fellowship/Bite The Bullet/Elf Scout/Elf_Scout.stl"))["map"]["id"] == maps[0]["id"]
+send("DELETE", f"/api/maps/{maps[0]['id']}")
+assert [x["model"] for x in get(ef)["items"]] == ["Bite The Bullet"] and get("/api/maps") == []
+print("folder mappings ok")
+
 for _ in range(120):
     pv = get("/api/status")["previews"]
     if not pv.get("pending"):

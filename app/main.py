@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, archives, config, db, library, settings
+from . import __version__, archives, classify, config, db, library, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = FastAPI(title="Resin Model Manager", version=__version__)
@@ -424,6 +424,58 @@ def delete_override(oid: int):
     db.conn().execute("DELETE FROM overrides WHERE id=?", (oid,))
     db.conn().commit()
     library.reclassify()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- folder mappings
+
+class MapIn(BaseModel):
+    prefix: str
+    roles: list[str]
+
+
+def _check_map(m: MapIn) -> tuple[str, tuple]:
+    prefix = m.prefix.strip().strip("/")
+    if not prefix:
+        raise HTTPException(400, "Pick a folder to apply the mapping to")
+    try:
+        roles = classify.check_roles(m.roles)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return prefix, roles
+
+
+@app.get("/api/maps")
+def list_maps():
+    counts = {}
+    rows = db.conn().execute("SELECT logical_path FROM files").fetchall()
+    maps = library.path_maps()
+    for m in maps:
+        counts[m["id"]] = sum(1 for r in rows if library._under(r["logical_path"], m["prefix"]))
+    return [{**m, "files": counts[m["id"]]} for m in maps]
+
+
+@app.get("/api/maps/suggest")
+def suggest_map(path: str):
+    """The folder roles a path is read with now (from its mapping or the automatic guess)."""
+    return library.map_suggestion(path)
+
+
+@app.post("/api/maps/preview")
+def preview_map(m: MapIn):
+    return library.preview_map(*_check_map(m))
+
+
+@app.post("/api/maps")
+def save_map(m: MapIn):
+    library.save_map(*_check_map(m))
+    return {"ok": True}
+
+
+@app.delete("/api/maps/{map_id}")
+def delete_map(map_id: int):
+    if not library.delete_map(map_id):
+        raise HTTPException(404)
     return {"ok": True}
 
 

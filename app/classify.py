@@ -88,6 +88,9 @@ class Guess:
     option: str
     supported: bool | None
     model_root: str  # logical path prefix identifying this model (used for overrides)
+    # What each folder of the path was read as, up to the model folder (see ROLES).
+    roles: tuple[str, ...] = ()
+    release_index: int = -1  # position of the release folder in the path, -1 if none
 
 
 def name_key(name: str) -> str:
@@ -125,39 +128,87 @@ def guess(logical_path: str, release_depth: int = 0, sibling_stems: list[str] | 
     ignored_keys: leading folders that are neither creator nor release (see layout())."""
     p = PurePosixPath(logical_path)
     folders = list(p.parts[:-1])
-    stem = p.stem
     skipped, release_depth = layout(folders, release_depth, ignored_keys, creator_keys)
-    head, folders = folders[:skipped], folders[skipped:]
-    creator = " / ".join(folders[:release_depth])
-    if len(folders) > release_depth:
-        release_raw = folders[release_depth]
-        rest = folders[release_depth + 1:]
-    else:
-        release_raw = ""
-        rest = []
+    rel_i = skipped + release_depth
+    if len(folders) <= rel_i:  # not deep enough to have a release folder
+        return _tail(logical_path, folders, " / ".join(folders[skipped:]), -1, len(folders),
+                     sibling_stems, creator_keys, ("ignore",) * skipped + ("creator",) * (len(folders) - skipped))
+    roles = ("ignore",) * skipped + ("creator",) * release_depth + ("release",)
+    return _tail(logical_path, folders, " / ".join(folders[skipped:rel_i]), rel_i, rel_i + 1,
+                 sibling_stems, creator_keys, roles)
+
+
+# Roles a user can give the folders of a path in a folder mapping. Folders below the
+# model (or below the release when no model is chosen) are read automatically.
+ROLES = ("creator", "release", "model", "ignore")
+
+
+def check_roles(roles: list[str]) -> tuple[str, ...]:
+    """Validate a folder mapping and trim it to the last folder that has a role."""
+    roles = [r if r in ROLES else "auto" for r in roles]
+    if roles.count("release") != 1:
+        raise ValueError("Pick exactly one Release folder")
+    rel_i = roles.index("release")
+    if any(r == "creator" for r in roles[rel_i:]):
+        raise ValueError("Creator folders must come before the Release folder")
+    if roles.count("model") > 1:
+        raise ValueError("Pick at most one Model folder")
+    if "model" in roles and roles.index("model") < rel_i:
+        raise ValueError("The Model folder must come after the Release folder")
+    end = roles.index("model") if "model" in roles else rel_i
+    if any(r != "auto" for r in roles[end + 1:]):
+        raise ValueError("Folders below the model are read automatically; leave them on Automatic")
+    # Above the model, a folder without a role is skipped.
+    return tuple("ignore" if r == "auto" else r for r in roles[:end + 1])
+
+
+def mapped(logical_path: str, roles: tuple[str, ...], sibling_stems: list[str] | None = None,
+           creator_keys: set[str] | None = None) -> Guess:
+    """Read a path with a folder mapping the user set (see check_roles)."""
+    folders = list(PurePosixPath(logical_path).parts[:-1])
+    rel_i = roles.index("release")
+    creator = " / ".join(f for f, r in zip(folders, roles) if r == "creator")
+    if len(folders) <= rel_i:
+        return _tail(logical_path, folders, creator, -1, len(folders), sibling_stems, creator_keys,
+                     roles[:len(folders)])
+    model_i = roles.index("model") if "model" in roles else -1
+    return _tail(logical_path, folders, creator, rel_i, model_i if model_i >= 0 else rel_i + 1,
+                 sibling_stems, creator_keys, roles, forced_model=model_i >= 0)
+
+
+def _tail(logical_path: str, folders: list[str], creator: str, rel_i: int, rest_i: int,
+          sibling_stems, creator_keys, roles, forced_model: bool = False) -> Guess:
+    """Shared end of guess() and mapped(): model, options and support from the folders
+    from rest_i down (the first one is the model when forced_model)."""
+    stem = PurePosixPath(logical_path).stem
+    release_raw = folders[rel_i] if rel_i >= 0 else ""
     release = pretty_clean(release_raw) if release_raw else "Unsorted"
+    rest = folders[rest_i:]
 
     supported = None
-    for part in [*rest, stem]:
+    for part in [*folders[rel_i + 1:], stem] if rel_i >= 0 else [stem]:
         flag = support_flag(part)
         if flag is not None:
             supported = flag  # deepest marker wins
     if supported is None and release_raw:
         supported = support_flag(release_raw)
 
-    skip = {name_key(f) for f in folders[:release_depth]} | (creator_keys or set())
-    meaningful = [(i, f) for i, f in enumerate(rest) if not is_noise(f, release_raw) and name_key(f) not in skip]
+    skip = {name_key(f) for f, r in zip(folders, roles) if r == "creator"} | (creator_keys or set())
+    meaningful = [(i, f) for i, f in enumerate(rest)
+                  if (forced_model and i == 0) or (not is_noise(f, release_raw) and name_key(f) not in skip)]
     if meaningful:
         idx, mfolder = meaningful[0]
         model = pretty_clean(mfolder)
         model_key = strip_tokens(mfolder)
         options = [pretty_clean(f) for _, f in meaningful[1:] if strip_tokens(f) != model_key]
-        model_root = "/".join([*head, *folders[:release_depth + 1], *rest[:idx + 1]])
-        return Guess(creator, release, model, " / ".join(options), supported, model_root)
+        model_i = rest_i + idx
+        roles = tuple(roles[:model_i]) + ("ignore",) * (model_i - len(roles)) + ("model",)
+        return Guess(creator, release, model, " / ".join(options), supported,
+                     "/".join(folders[:model_i + 1]), roles, rel_i)
 
     # Loose files: derive the model from the file name.
     model = _model_from_stem(stem, sibling_stems or [])
-    return Guess(creator, release, model, "", supported, logical_path)
+    return Guess(creator, release, model, "", supported, logical_path, tuple(roles[:len(folders)]), rel_i)
 
 
 def _words(stem: str) -> list[str]:
