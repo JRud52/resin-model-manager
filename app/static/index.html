@@ -33,6 +33,8 @@
   <aside id="sidebar">
     <div class="side-title">Creators <button id="editCreatorsBtn" class="link" title="Set the creator of several releases">Edit</button></div>
     <ul id="creators"></ul>
+    <div class="side-title">MyMiniFactory <button id="mmfSyncBtn" class="link" title="Bring in your MyMiniFactory library">Sync</button></div>
+    <ul id="mmfList"></ul>
     <div class="side-title">Releases</div>
     <ul id="releases"></ul>
     <div class="side-title">Tags</div>
@@ -47,6 +49,7 @@
       <button id="releaseTagBtn" class="hidden">Tag all models in this release</button>
     </div>
     <div id="releaseImages" class="hidden"></div>
+    <div id="mmfStrip" class="hidden"></div>
     <div id="empty" class="empty hidden"></div>
     <div id="grid"></div>
     <button id="more" class="hidden">Load more</button>
@@ -267,6 +270,25 @@
       <button value="cancel" formnovalidate>Cancel</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="mmfDlg">
+  <div class="dlg-head"><h2>MyMiniFactory library</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
+  <p class="muted small">MyMiniFactory has no way for other apps to read your library, so a bookmark does it from your own logged-in browser.
+    Your purchases, pledges and tribe releases are listed here with a link to each one; nothing is downloaded and your MyMiniFactory login is never stored.</p>
+  <ol class="steps">
+    <li>Drag this button to your bookmarks bar: <a id="mmfBookmarklet" class="bookmarklet" href="#">Sync to Resin Models</a></li>
+    <li>Go to <a href="https://www.myminifactory.com/library" target="_blank" rel="noopener">myminifactory.com</a> and log in.</li>
+    <li>Click the bookmark. A Resin Models window opens and fills in your library. Click it again whenever you buy or pledge something new.</li>
+  </ol>
+  <p class="muted small">Make the bookmark from this page at the address you normally use for Resin Models; it sends the list back to that address.</p>
+  <p id="mmfInfo" class="small"></p>
+  <div class="row">
+    <label class="button-like">Upload myminifactory-library.json <input id="mmfFile" type="file" accept=".json,application/json" hidden></label>
+    <div class="spacer"></div>
+    <button id="mmfClear">Remove MyMiniFactory list</button>
+  </div>
+  <p class="muted small">The upload is for when the bookmark can't open the Resin Models window: it saves that file instead.</p>
 </dialog>
 
 <div id="version" class="muted"></div>

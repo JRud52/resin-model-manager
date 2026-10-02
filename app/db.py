@@ -95,6 +95,26 @@ CREATE TABLE IF NOT EXISTS path_maps (
     created REAL DEFAULT (strftime('%s','now'))
 );
 
+-- The user's MyMiniFactory library (purchases, pledges, tribes), sent by the sync
+-- bookmarklet from their logged-in browser. Only listed here; nothing is downloaded.
+CREATE TABLE IF NOT EXISTS mmf_items (
+    id INTEGER PRIMARY KEY,          -- MyMiniFactory object id
+    name TEXT NOT NULL,
+    creator TEXT NOT NULL DEFAULT '',
+    creator_url TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    image TEXT NOT NULL DEFAULT '',
+    updated REAL NOT NULL
+);
+-- Where each item is in the MyMiniFactory library: source purchase | pledge | tribe,
+-- collection the campaign or tribe name ('' for plain purchases).
+CREATE TABLE IF NOT EXISTS mmf_links (
+    item_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    collection TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (item_id, source, collection)
+);
+
 -- Values saved from the Settings dialog (see settings.py).
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,

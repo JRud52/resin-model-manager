@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyMiniFactory sync · Resin Models</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="sync-page">
+<main>
+  <h2>MyMiniFactory sync</h2>
+  <p id="msg">Waiting for your MyMiniFactory library…</p>
+  <p class="muted small" id="hint">Keep the MyMiniFactory tab open while it reads your library.
+    If nothing happens, the bookmark saves a file called myminifactory-library.json instead; upload it in Resin Models under MyMiniFactory › Sync.</p>
+  <p><a href="/" id="back" class="hidden">Open Resin Models</a></p>
+</main>
+<script>
+// Opened by the sync bookmarklet (static/mmf-bookmarklet.js) from a MyMiniFactory tab.
+const MMF = /^https:\/\/([a-z0-9-]+\.)*myminifactory\.com$/;
+const msg = document.getElementById("msg");
+window.addEventListener("message", async (e) => {
+  if (!MMF.test(e.origin) || !e.data) return;
+  if (e.data.type === "mmf-progress") msg.textContent = e.data.text;
+  if (e.data.type !== "mmf-library") return;
+  const problems = (e.data.problems || []).join("; ");
+  if (!(e.data.complete || []).length) { msg.textContent = "Couldn't read your MyMiniFactory library. " + problems; return; }
+  msg.textContent = `Saving ${e.data.items.length} items…`;
+  let text;
+  try {
+    const r = await fetch("/api/mmf/import", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: e.data.items, complete: e.data.complete }) });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.detail || r.statusText);
+    text = `Synced ${res.total} MyMiniFactory items, ${res.missing} of them not in your library yet.` +
+      (problems ? ` Some parts couldn't be read: ${problems}` : "");
+  } catch (err) { text = "Saving failed: " + err.message; }
+  msg.textContent = text;
+  document.getElementById("hint").classList.add("hidden");
+  document.getElementById("back").classList.remove("hidden");
+  e.source.postMessage({ type: "mmf-done", text: "Resin Models: " + text }, e.origin);
+});
+if (window.opener) window.opener.postMessage({ type: "mmf-ready" }, "*");
+else msg.textContent = "Couldn't connect to the MyMiniFactory tab. If you clicked the sync bookmark, it saves " +
+  "myminifactory-library.json in a few seconds; upload it in Resin Models under MyMiniFactory › Sync.";
+</script>
+</body>
+</html>
