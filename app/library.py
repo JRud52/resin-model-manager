@@ -361,8 +361,13 @@ def _upsert(c, table, rel, member, logical, name, ext, size, mtime):
 
 # ---------------------------------------------------------------- classification
 
+def model_key(model: str) -> str:
+    """Model names that differ only in support/format words are the same model."""
+    return classify.strip_tokens(model) or classify.norm(model)
+
+
 def model_id(release: str, model: str) -> str:
-    key = classify.norm(release) + "\x00" + (classify.strip_tokens(model) or classify.norm(model))
+    key = classify.norm(release) + "\x00" + model_key(model)
     return hashlib.sha1(key.encode()).hexdigest()[:12]
 
 
@@ -391,6 +396,11 @@ class _Reader:
             lp = PurePosixPath(r["logical_path"])
             self.by_folder[str(lp.parent)].append(lp.stem)
         self.creator_keys = self._creator_keys(rows, set_creators, overrides)
+        # (release, model key) of every combined part -> (combined name, option group)
+        self.combined: dict[tuple[str, str], tuple[str, str]] = {}
+        for cb in combines():
+            for part in cb["parts"]:
+                self.combined[(cb["release"].lower(), model_key(part))] = (cb["name"], part)
 
     def roles_for(self, lp: str) -> tuple | None:
         return next((roles for pre, roles in self.maps if _under(lp, pre)), None)
@@ -449,6 +459,9 @@ def _classify(rows, overrides, release_creators, reader) -> list[list]:
                     set_unknown = o["supported"] == -1
                 hidden = o["hidden"] if o["hidden"] is not None else hidden
         creator = release_creators.get(release.lower(), creator)
+        combined = reader.combined.get((release.lower(), model_key(model)))
+        if combined:  # the former model becomes an option group of the combined one
+            model, option = combined[0], " / ".join(filter(None, (combined[1], option)))
         sup = None if supported is None else int(supported)
         # Nothing in the name or a parent folder says supported: treat it as unsupported,
         # unless the user explicitly marked it unknown.
@@ -539,6 +552,86 @@ def delete_map(map_id: int) -> bool:
     c.commit()
     reclassify()
     _carry_tags(before)
+    return True
+
+
+# ---------------------------------------------------------------- combined models
+
+def combines(release: str | None = None) -> list[dict]:
+    q, args = "SELECT * FROM model_combines", ()
+    if release is not None:
+        q, args = q + " WHERE release = ?", (release,)
+    return [{"id": r["id"], "release": r["release"], "name": r["name"], "parts": json.loads(r["parts"])}
+            for r in db.conn().execute(q + " ORDER BY release COLLATE NOCASE, name COLLATE NOCASE", args)]
+
+
+def combine_for(release: str, model: str) -> dict | None:
+    """The combine that made this model, if any."""
+    return next((cb for cb in combines(release) if model_key(cb["name"]) == model_key(model)), None)
+
+
+def _release_ids(release: str) -> dict[int, str]:
+    return {r["id"]: r["model_id"] for r in db.conn().execute(
+        "SELECT id, model_id FROM files WHERE release = ? COLLATE NOCASE", (release,))}
+
+
+def _regroup(before: dict[int, str]):
+    reclassify()
+    _carry_tags(before)
+    _preview_wakeup.set()
+
+
+def combine_models(release: str, model_ids: list[str], name: str) -> dict:
+    """Combine models of a release into one called name; each becomes an option group
+    named after it. A selected model that is itself a combine is merged into the new one."""
+    c = db.conn()
+    names: dict[str, str] = {}
+    for r in c.execute("SELECT model_id, MIN(model) model FROM files WHERE release = ? GROUP BY model_id", (release,)):
+        names[r["model_id"]] = r["model"]
+    picked = [names[m] for m in dict.fromkeys(model_ids) if m in names]
+    if len(picked) < 2:
+        raise ValueError("Pick at least two models of the release")
+    parts: list[str] = []
+    absorbed = []
+    for model in picked:
+        cb = combine_for(release, model)
+        if cb:
+            parts += cb["parts"]
+            absorbed.append(cb["id"])
+        else:
+            parts.append(model)
+    parts = list({model_key(p): p for p in reversed(parts)}.values())[::-1]  # drop repeats, keep order
+    before = _release_ids(release)
+    c.executemany("DELETE FROM model_combines WHERE id = ?", [(i,) for i in absorbed])
+    c.execute("INSERT INTO model_combines(release, name, parts) VALUES (?, ?, ?)",
+              (release, name, json.dumps(parts)))
+    c.commit()
+    _regroup(before)
+    return {"id": model_id(release, name), "parts": parts}
+
+
+def update_combine(combine_id: int, name: str, release: str) -> bool:
+    c = db.conn()
+    row = c.execute("SELECT release FROM model_combines WHERE id = ?", (combine_id,)).fetchone()
+    if not row:
+        return False
+    before = {**_release_ids(row["release"]), **_release_ids(release)}
+    c.execute("UPDATE model_combines SET name = ?, release = ? WHERE id = ?", (name, release, combine_id))
+    c.commit()
+    _regroup(before)
+    return True
+
+
+def split_combine(combine_id: int) -> bool:
+    """Undo a combine: its parts are separate models again (tags are copied back to them)."""
+    c = db.conn()
+    row = c.execute("SELECT release FROM model_combines WHERE id = ?", (combine_id,)).fetchone()
+    if not row:
+        return False
+    before = _release_ids(row["release"])
+    c.execute("DELETE FROM model_combines WHERE id = ?", (combine_id,))
+    c.commit()
+    _regroup(before)
     return True
 
 

@@ -95,6 +95,17 @@ CREATE TABLE IF NOT EXISTS path_maps (
     created REAL DEFAULT (strftime('%s','now'))
 );
 
+-- Models combined into one: every model of the release named in parts becomes an
+-- option group (named after it) of the model called name. Keyed on names, like
+-- release_creators, so it survives re-indexing; deleting the row splits them again.
+CREATE TABLE IF NOT EXISTS model_combines (
+    id INTEGER PRIMARY KEY,
+    release TEXT NOT NULL COLLATE NOCASE,
+    name TEXT NOT NULL,
+    parts TEXT NOT NULL,             -- JSON list of the former model names
+    created REAL DEFAULT (strftime('%s','now'))
+);
+
 -- Values saved from the Settings dialog (see settings.py).
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,

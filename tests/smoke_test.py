@@ -251,14 +251,57 @@ except urllib.error.HTTPError as e:
 put_settings({"preferred_format": "stl", "preferred_support": "supported"})
 print("preferences ok")
 
-# Folder mappings: say which folder levels are release / model for a whole folder, with a preview,
-# tags following the regrouped models, and removal going back to the automatic guess.
 def send(method, u, body=None):
     req = urllib.request.Request(BASE + u, data=None if body is None else json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method=method)
     return json.load(urllib.request.urlopen(req))
 
 
+# Combining models: several models of a release become one, each an option group named after it.
+dl = "/api/models?release=Dragon%20Lords"
+parts = {m["model"]: m for m in get(dl)["items"]}
+assert sorted(parts) == ["Knight", "Red Dragon"], parts
+post(f"/api/models/{parts['Knight']['id']}/tags", {"add": ["knightly"]})
+try:
+    post("/api/combines", {"release": "Dragon Lords", "name": "X", "model_ids": [parts["Knight"]["id"]]})
+    raise SystemExit("combine of one model accepted")
+except urllib.error.HTTPError as e:
+    assert e.code == 400
+res = post("/api/combines", {"release": "Dragon Lords", "name": " Dragon  Rider ",
+                             "model_ids": [parts["Red Dragon"]["id"], parts["Knight"]["id"]]})
+assert res["parts"] == ["Red Dragon", "Knight"], res
+items = get(dl)["items"]
+assert [(m["model"], m["options"]) for m in items] == [("Dragon Rider", 2)], items
+assert set(items[0]["tags"]) == {"fantasy", "knightly"}, items[0]["tags"]
+d = get(f"/api/models/{res['id']}")
+assert {f["option"].split(" / ")[0] for f in d["files"]} == {"Red Dragon", "Knight"}, d["files"]
+assert d["combine"]["parts"] == ["Red Dragon", "Knight"]
+assert "Knight_front.jpg" in [i["name"] for i in d["images"]], "pictures follow the combined model"
+cid = d["combine"]["id"]
+assert [c["name"] for c in get("/api/combines")] == ["Dragon Rider"]
+# Renaming keeps the option groups and the tags; a re-index keeps the combine.
+res = send("PUT", f"/api/combines/{cid}", {"release": "Dragon Lords", "name": "Dragon Knight"})
+post("/api/index")
+time.sleep(0.5)
+wait_job()
+items = get(dl)["items"]
+assert [(m["model"], m["id"], m["options"]) for m in items] == [("Dragon Knight", res["id"], 2)], items
+assert "knightly" in items[0]["tags"]
+# Only models of the release itself can be combined.
+try:
+    post("/api/combines", {"release": "Bits Pack", "name": "Orc", "model_ids": [
+        m["id"] for m in get("/api/models?release=Bits%20Pack")["items"]] + [items[0]["id"]]})
+    raise SystemExit("combine across releases accepted")
+except urllib.error.HTTPError as e:
+    assert e.code == 400
+send("DELETE", f"/api/combines/{cid}")
+items = {m["model"]: m for m in get(dl)["items"]}
+assert sorted(items) == ["Knight", "Red Dragon"] and "knightly" in items["Knight"]["tags"], items
+assert get("/api/combines") == []
+print("combining models ok")
+
+# Folder mappings: say which folder levels are release / model for a whole folder, with a preview,
+# tags following the regrouped models, and removal going back to the automatic guess.
 ef = "/api/models?release=Explorers%20Fellowship"
 old = get(ef)["items"]
 assert [m["model"] for m in old] == ["Bite The Bullet"], old

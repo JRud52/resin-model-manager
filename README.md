@@ -56,6 +56,12 @@ groups them by **release** and **model**, separates **supported** and
   them); ✎ on a file changes its support flag, model, release or option group,
   for just that file or for a whole folder. Corrections are stored as rules on
   the path, survive new imports, and can be removed under ✎. No files are renamed.
+* **Combining models.** Some releases are one model split into modular parts
+  that got read as separate models (Head, Body, Arms). With a release selected,
+  click *Combine models*, tick the parts and name the combined model; each
+  former model becomes an option group of it (Head, Body, Arms), and their tags
+  carry over. The combine survives new imports, can be renamed from *Edit*, and
+  is undone with *Split apart* on the model or under ✎ Corrections.
 * **Tags.** Add tags on a model's page (type and press Enter; existing tags are
   suggested). With a release selected, *Tag all models in this release* adds or
   removes tags on every model in it at once. Click tags in the sidebar to filter

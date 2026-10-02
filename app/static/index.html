@@ -43,8 +43,15 @@
       <div id="crumbs"></div>
       <div id="activeTags" class="badges"></div>
       <div class="spacer"></div>
+      <button id="combineBtn" class="hidden" title="Pick models that are really parts of one model">Combine models</button>
       <button id="releaseCreatorBtn" class="hidden">Set creator</button>
       <button id="releaseTagBtn" class="hidden">Tag all models in this release</button>
+    </div>
+    <div id="selectBar" class="select-bar hidden">
+      <span id="selectCount"></span>
+      <div class="spacer"></div>
+      <button id="combineGo" class="primary" disabled>Combine…</button>
+      <button id="selectCancel">Cancel</button>
     </div>
     <div id="releaseImages" class="hidden"></div>
     <div id="empty" class="empty hidden"></div>
@@ -99,6 +106,7 @@
         <div class="row">
           <button type="submit" class="primary">Save</button>
           <button type="button" id="hideModelBtn">Hide model</button>
+          <button type="button" id="splitBtn" class="hidden" title="Make the option groups separate models again">Split apart</button>
           <button type="button" id="cancelEdit">Cancel</button>
         </div>
       </form>
@@ -158,6 +166,9 @@
   <h3>Folder mappings</h3>
   <p class="muted small">Each mapping says which folder levels are the creator, release and model for every file in the folder shown. Use <b>Map folders</b> on a model to add one.</p>
   <table id="mapsTable"></table>
+  <h3>Combined models</h3>
+  <p class="muted small">Models combined into one, each former model now an option group. Use <b>Combine models</b> in a release to add one; Split makes them separate models again.</p>
+  <table id="combinesTable"></table>
   <div class="row" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
 </dialog>
 
@@ -250,6 +261,21 @@
     <div class="row">
       <button value="add" class="primary">Add to all</button>
       <button value="remove">Remove from all</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="combineDlg">
+  <form method="dialog" class="card-form">
+    <div class="dlg-head"><h3>Combine into one model</h3><div class="spacer"></div><button class="icon" value="cancel" formnovalidate>✕</button></div>
+    <label>Name of the combined model <input name="name" list="modelList" autocomplete="off" required></label>
+    <p class="muted small">Each model becomes an option group of the combined model, named after it:</p>
+    <ul id="combineParts" class="parts"></ul>
+    <p class="muted small">Kept across re-imports. Undo with Split apart on the model, or from Corrections. Files are never moved or renamed.</p>
+    <p class="small err" id="combineErr"></p>
+    <div class="row">
+      <button value="save" class="primary">Combine</button>
       <button value="cancel" formnovalidate>Cancel</button>
     </div>
   </form>

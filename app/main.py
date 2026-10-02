@@ -229,6 +229,7 @@ def model_detail(model_id: str, include_hidden: bool = False):
         "images": library.model_images(model_id),
         "tags": _tags_for([model_id])[model_id],
         "roots": sorted({r["model_root"] for r in rows}),
+        "combine": library.combine_for(rows[0]["release"], rows[0]["model"]),
         "files": [_file_dict(r) for r in rows],
     }
 
@@ -475,6 +476,50 @@ def save_map(m: MapIn):
 @app.delete("/api/maps/{map_id}")
 def delete_map(map_id: int):
     if not library.delete_map(map_id):
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- combined models
+
+class CombineIn(BaseModel):
+    release: str
+    name: str
+    model_ids: list[str] = []
+
+
+def _combine_name(name: str) -> str:
+    name = " ".join(name.split())
+    if not name or len(name) > 200:
+        raise HTTPException(400, "Give the combined model a name")
+    return name
+
+
+@app.get("/api/combines")
+def list_combines():
+    return library.combines()
+
+
+@app.post("/api/combines")
+def combine(body: CombineIn):
+    """Combine models of a release into one; each becomes an option group."""
+    try:
+        return library.combine_models(body.release, body.model_ids, _combine_name(body.name))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/combines/{combine_id}")
+def update_combine(combine_id: int, body: CombineIn):
+    """Rename a combined model or move it to another release."""
+    if not library.update_combine(combine_id, _combine_name(body.name), body.release):
+        raise HTTPException(404)
+    return {"id": library.model_id(body.release, body.name)}
+
+
+@app.delete("/api/combines/{combine_id}")
+def split_combine(combine_id: int):
+    if not library.split_combine(combine_id):
         raise HTTPException(404)
     return {"ok": True}
 
