@@ -694,7 +694,9 @@ async function openModel(id) {
   $("#mTagInput").value = "";
   renderModelTags();
   const shown = renderFiles();
+  const mainFile = m.main_file && m.files.find((f) => f.id === m.main_file);
   if (same && state.current && shown.some((f) => f.id === state.current.id)) showFile(state.current);
+  else if (mainFile) showFile(mainFile);
   else if (m.images.length) showImage(m.images[0]);
   else showFile(shown.find((f) => f.id === m.cover) || shown[0] || m.files[0]);
   const dlg = $("#modelDlg");
@@ -736,6 +738,7 @@ function renderFiles() {
         <div class="fname"><div title="${esc(f.path)}">${esc(f.name)}</div>
           <div class="muted small">${fmtSize(f.size)}${f.archive ? " · in " + esc(f.archive.split("/").pop()) : ""}</div></div>
         <a href="/api/files/${f.id}/download" download title="Download">↓</a>
+        ${f.preview === "none" || f.preview === "error" ? "" : `<button data-file-main="${f.id}" class="star ${m.main_file === f.id ? "on" : ""}" title="${m.main_file === f.id ? "Main image of this model (click to unset)" : "Use this preview as the model's main image"}">${m.main_file === f.id ? "★" : "☆"}</button>`}
         <button data-edit="${f.id}" title="Correct this file">✎</button>
       </div>`).join("");
   }).join("");
@@ -804,6 +807,15 @@ $("#mFiles").addEventListener("click", (e) => {
   const edit = e.target.closest("[data-edit]");
   if (edit) { openFileEdit(state.model.files.find((f) => f.id === +edit.dataset.edit)); return; }
   // ☆ picks the model's main image (its card and the first image here); "Release" picks the release's.
+  const fileMain = e.target.closest("[data-file-main]");
+  if (fileMain) {
+    const id = +fileMain.dataset.fileMain;
+    const on = state.model.main_file !== id;
+    api("/api/main-picture", { method: "PUT", body: JSON.stringify({ kind: "model", key: state.model.id, file_id: on ? id : null }) })
+      .then(() => { refresh(); return openModel(state.model.id); })
+      .then(() => { const f = state.model.files.find((x) => x.id === id); if (f) showFile(f); });
+    return;
+  }
   const picMain = e.target.closest("[data-pic-main], [data-pic-rel]");
   if (picMain) {
     const forModel = picMain.hasAttribute("data-pic-main");
