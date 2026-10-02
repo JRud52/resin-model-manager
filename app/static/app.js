@@ -378,14 +378,15 @@ function renderFiles() {
     const [oa, sa] = a.split("\u0000"), [ob, sb] = b.split("\u0000");
     return oa.localeCompare(ob) || rank[sa] - rank[sb];
   });
-  const pics = m.images.length ? `<div class="group-title">Pictures</div>` + m.images.map((i) => `
+  // Collapsed by default (rebuilt on every open); the main preview still shows the first picture.
+  const pics = m.images.length ? `<details class="pics"><summary class="group-title">Pictures (${m.images.length})</summary>` + m.images.map((i) => `
       <div class="file" data-img="${i.id}">
         <img loading="lazy" class="photo" src="/api/images/${i.id}/preview" onerror="this.outerHTML='<div class=noimg>IMG</div>'">
         <div class="fname"><div title="${esc(i.path)}">${esc(i.name)}</div>
           <div class="muted small">${i.scope === "release" ? "Release picture" : "Model picture"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
         <a href="/api/images/${i.id}/full" target="_blank" rel="noopener" title="Open full size">↗</a>
         <button data-pic-edit="${i.id}" title="Choose which model this picture belongs to">✎</button>
-      </div>`).join("") : "";
+      </div>`).join("") + `</details>` : "";
   $("#mFiles").innerHTML = pics + keys.map((k) => {
     const [opt, sup] = k.split("\u0000");
     const title = opt ? `${esc(opt)} · ${sup}` : sup;
