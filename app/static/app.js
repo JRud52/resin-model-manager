@@ -661,8 +661,8 @@ function renderFiles() {
         <div class="fname"><div title="${esc(i.path)}">${esc(i.name)}</div>
           <div class="muted small">${i.scope === "release" ? "Release picture" : "Model picture"}${i.archive ? " · in " + esc(i.archive.split("/").pop()) : ""}</div></div>
         <a href="/api/images/${i.id}/full" target="_blank" rel="noopener" title="Open full size">↗</a>
-        <button data-pic-main="${i.id}" class="star ${i.main_release ? "on" : ""}" title="${i.main_release ? "Main picture of the release (click to unset)" : "Use as the release's main picture"}">${i.main_release ? "★" : "☆"}</button>
-        <button data-pic-edit="${i.id}" title="Choose which model this picture belongs to, or make it the main picture">✎</button>
+        <button data-pic-main="${i.id}" class="star ${i.main_release ? "on" : ""}" title="${i.main_release ? "Main image of the release (click to unset)" : "Use as the release's main image"}">${i.main_release ? "★" : "☆"}</button>
+        <button data-pic-edit="${i.id}" title="Choose which model this image belongs to, or make it the main image">✎</button>
       </div>`).join("") + `</details>` : "";
   $("#mFiles").innerHTML = pics + keys.map((k) => {
     const [opt, sup] = k.split("\u0000");
