@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, archives, classify, config, db, library, settings
+from . import __version__, archives, classify, config, db, library, mmf, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = FastAPI(title="Resin Model Manager", version=__version__)
@@ -545,6 +545,39 @@ def split_combine(combine_id: int):
     if not library.split_combine(combine_id):
         raise HTTPException(404)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- MyMiniFactory
+
+@app.get("/api/mmf")
+def mmf_items(q: str = "", missing: bool = False, offset: int = 0, limit: int = Query(200, le=1000)):
+    """The synced MyMiniFactory library; `local` is the matching local release or model."""
+    return mmf.items(q, missing, offset, limit)
+
+
+@app.get("/api/mmf/status")
+def mmf_status():
+    return mmf.status()
+
+
+@app.post("/api/mmf/import")
+def mmf_import(payload: dict):
+    try:
+        return mmf.import_library(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/mmf")
+def mmf_clear():
+    mmf.clear()
+    return {"ok": True}
+
+
+@app.get("/mmf-sync")
+def mmf_sync_page():
+    """Opened by the sync bookmarklet; receives the library from the MyMiniFactory tab."""
+    return FileResponse(STATIC / "mmf-sync.html")
 
 
 @app.get("/api/hidden")

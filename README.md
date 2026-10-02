@@ -105,6 +105,19 @@ groups them by **release** and **model**, separates **supported** and
   saved as a correction rule.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
+* **Your MyMiniFactory library.** MyMiniFactory has no API for a user's
+  purchases, pledges or tribes, so *Sync* (next to MyMiniFactory in the sidebar)
+  gives you a bookmark to drag to your bookmarks bar. Click it on
+  myminifactory.com while logged in: it reads your library the way the site's
+  own Library page does and sends the list to a Resin Models window it opens.
+  Items are listed with their picture, creator, campaign or tribe and a link to
+  MyMiniFactory; nothing is downloaded and your MyMiniFactory login is never
+  stored. Items whose name matches a local release or model are marked *in your
+  library*; *Not in your library* lists the rest. Searching shows matching
+  MyMiniFactory items above the local results. If the bookmark can't reach the
+  Resin Models window it saves `myminifactory-library.json` instead, which you
+  upload in the same dialog. This relies on MyMiniFactory's website, not a
+  supported API, so a site change can break it.
 
 ![Model view](docs/model.png)
 
@@ -195,6 +208,7 @@ pip install -r requirements.txt
 python tests/make_sample_library.py /tmp/rmm/src
 SOURCE_DIR=/tmp/rmm/src LIBRARY_DIR=/tmp/rmm/lib DATA_DIR=/tmp/rmm/data uvicorn app.main:app --port 8417
 python tests/smoke_test.py http://localhost:8417 /tmp/rmm/src
+pip install playwright && python tests/mmf_test.py http://localhost:8417  # MyMiniFactory sync on a fake site
 ```
 
 Stack: Python 3.12, FastAPI, SQLite, numpy + Pillow renderer, py7zr; plain
