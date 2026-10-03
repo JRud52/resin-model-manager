@@ -41,7 +41,15 @@ body.resizing { cursor: col-resize; user-select: none; }
 #releases .name, #creators .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #releases .by, #creators .by { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 #releases li.active .by, #creators li.active .by { color: #08131d; }
-.side-title .link { all: unset; cursor: pointer; float: right; text-transform: none; letter-spacing: 0; color: var(--accent); }
+.side-title[data-sec] { cursor: pointer; user-select: none; display: flex; align-items: baseline; gap: 6px; }
+.side-title[data-sec]::before { content: "▾"; width: 10px; transition: transform .15s; }
+.side-title[data-sec]:hover .sec-name { color: var(--text); }
+.side-title .sec-now { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; color: var(--accent); }
+.side-title.collapsed::before { transform: rotate(-90deg); }
+.side-title.collapsed + ul { display: none; }
+#releases .mmf-tag { font-size: 10px; padding: 0 5px; margin-left: 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); vertical-align: 1px; }
+#releases li.active .mmf-tag { color: #08131d; border-color: #08131d; }
+.side-title .link { all: unset; cursor: pointer; margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent); }
 .side-title .link:hover { text-decoration: underline; }
 #creatorDlg { max-width: min(560px, 96vw); }
 #creatorDlg .card-form { background: none; padding: 0; margin: 0; }

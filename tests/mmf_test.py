@@ -130,7 +130,22 @@ with sync_playwright() as p:
     assert "MiniForge" not in creators, creators
     assert creators["Castle_Works!"]["releases"] == 0 and creators["Castle_Works!"]["mmf"] == 1, creators
     assert get("/api/mmf?creator=castle%20works")["total"] == 1
+    # Releases not in the library are listed with the local ones: a pledge or tribe is one release.
+    online = {r["release"]: r for r in get("/api/releases") if r["mmf"]}
+    assert set(online) == {"Ancient Wyrm", "Kickstarter: Castle Siege", "Javascript", "Greenskin Tribe"}, online
+    assert online["Greenskin Tribe"]["creator"] == "MiniForge" and online["Greenskin Tribe"]["models"] == 0
+    assert [i["id"] for i in get("/api/mmf?release=greenskin%20tribe")["items"]] == [6], "matched Goblin Boss left out"
     app.reload()
+    app.click("#releases li[data-r='Kickstarter: Castle Siege']")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
+    assert app.locator("#grid .card.mmf").count() == 1
+    app.click(".side-title[data-sec='releases']")  # sections fold, and stay folded after a reload
+    assert app.locator("#releases").is_hidden()
+    app.reload()
+    assert app.locator("#releases").is_hidden()
+    assert "Castle Siege" not in app.locator(".side-title[data-sec='releases']").inner_text(), "selection reset on reload"
+    app.click(".side-title[data-sec='releases']")
+    app.wait_for_selector("#releases li[data-r='Kickstarter: Castle Siege']")
     app.click("#creators li[data-c='Castle_Works!']")  # only on MyMiniFactory: opens its items there
     app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
     assert app.locator("#grid .card.mmf").count() == 1

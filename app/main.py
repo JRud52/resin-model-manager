@@ -118,7 +118,13 @@ def releases(q: str = "", tags: str = "", creator: Optional[str] = None):
     rows = c.execute(f"""SELECT release, MAX(creator) creator, COUNT(DISTINCT model_id) models, COUNT(*) files,
                          SUM(size) size FROM files WHERE {where} GROUP BY release ORDER BY release COLLATE NOCASE""",
                      args).fetchall()
-    return [dict(r) for r in rows]
+    out = [{**dict(r), "mmf": 0} for r in rows]
+    if not tags.strip():  # tags are only on local models
+        # Synced MyMiniFactory releases that aren't in the library yet are listed too (models 0).
+        local = {r[0].casefold() for r in c.execute("SELECT DISTINCT release FROM files WHERE hidden=0")}
+        out += mmf.releases(q, creator, local)
+        out.sort(key=lambda r: r["release"].casefold())
+    return out
 
 
 @app.get("/api/releases/images")
@@ -588,9 +594,9 @@ def split_combine(combine_id: int):
 
 @app.get("/api/mmf")
 def mmf_items(q: str = "", missing: bool = False, offset: int = 0, limit: int = Query(200, le=1000),
-              creator: Optional[str] = None):
+              creator: Optional[str] = None, release: Optional[str] = None):
     """The synced MyMiniFactory library; `local` is the matching local release or model."""
-    return mmf.items(q, missing, offset, limit, creator)
+    return mmf.items(q, missing, offset, limit, creator, release)
 
 
 @app.get("/api/mmf/status")
