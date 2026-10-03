@@ -61,7 +61,7 @@ async function loadCreators() {
     const tip = [label, c.releases && `${c.releases} release${c.releases === 1 ? "" : "s"}`,
       c.mmf && `${c.mmf} MyMiniFactory item${c.mmf === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
     return `<li data-c="${esc(c.creator)}" data-local="${c.releases ? 1 : ""}" class="${cls} ${state.creator === c.creator ? "active" : ""}" title="${esc(tip)}">
-      <span class="name">${esc(label)}${c.releases ? "" : `<span class="by">only on MyMiniFactory</span>`}</span><span class="muted">${n}</span></li>`;
+      <span class="name">${esc(label)}</span><span class="muted">${n}</span></li>`;
   };
   // "No creator" sits at the top so releases still missing one are easy to work through.
   $("#creators").innerHTML = (list.length ? `<li data-all class="${state.creator === null ? "active" : ""}"><span class="name">All creators</span></li>` : "") +
