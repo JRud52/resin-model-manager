@@ -23,7 +23,7 @@ def obj(i, name, creator="Dragon Forge", **extra):
 
 WYRM_PICS = {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/2.png"}}, {"large": {"url": f"{CDN}/7.png"}},
                        {"standard": {"url": f"{CDN}/8.png"}}]}
-PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS, archive_download_url="/download/2"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
+PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
 PLEDGES = [obj(4, "Siege Tower", creator="Castle_Works!", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
 # "Mini Forge" here. The shaman's display name is on its designer, its user_name is the account slug.
 def small(name):  # the library's own small picture link
@@ -38,17 +38,6 @@ def png(i):
     from PIL import Image
     b = BytesIO()
     Image.new("RGB", (64, 64), ((i * 70) % 256, 120, 200 - i * 25)).save(b, "PNG")
-    return b.getvalue()
-
-
-def wyrm_zip():
-    import io
-    import zipfile
-    b = io.BytesIO()
-    with zipfile.ZipFile(b, "w") as z:
-        z.writestr("Wyrm_supported.stl", "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\n"
-                   "vertex 0 10 0\nendloop\nendfacet\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 0 10 0\n"
-                   "vertex 0 0 10\nendloop\nendfacet\nendsolid t\n")
     return b.getvalue()
 
 
@@ -86,7 +75,6 @@ NEW_META = {
     "frontiers_metadata": [{"id": 555, "name": "Frog Kingdom"}],
     "frontier_releases_metadata/555": {"pledges": [{"id": 901, "name": "Tadpole"}], "addons": []},
     "bundles_metadata": [{"id": "bundle-1123", "originalId": 1123, "name": "Shroudborne"}],
-    "myObjects/object-12/downloadables": {"archives": [{"id": 77, "name": "paladin.zip"}], "pdfs": [], "parts": []},
 }
 
 
@@ -114,9 +102,6 @@ def fake_mmf(route):
         if body is None:
             return route.fulfill(status=404, body="{}")
         return route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
-    if NEW_API and "/download/12?archive_id=77" in url:
-        return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
-                             headers={"Content-Disposition": 'attachment; filename="paladin.zip"'})
     if "/data-library/purchases" in url:
         body = page_of(PURCHASES, page)
     elif "/data-library/campaigns" in url:
@@ -134,11 +119,6 @@ def fake_mmf(route):
             for n in "abcd"]}))
     elif "/api/v2/objects/" in url:
         return route.fulfill(status=404, body="{}")
-    elif url.endswith("/download/2"):
-        return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
-                             headers={"Content-Disposition": 'attachment; filename="Ancient_Wyrm.zip"'})
-    elif "/download/" in url:  # what the real site does when a download isn't allowed
-        return route.fulfill(status=200, content_type="text/html", body="<html>Log in</html>")
     elif "/data-library/" in url:
         return route.fulfill(status=404, body="{}")
     else:
@@ -297,34 +277,14 @@ with sync_playwright() as p:
     app.wait_for_function("document.getElementById('mPreview').naturalWidth > 0")
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-modal.png")
-    app.click("#mmfDownload")
-    app.wait_for_selector("#mFiles >> text=Waiting to download")
+    # Files come from MyMiniFactory itself: a link to the item, then the import dialog ready for it.
+    assert app.get_attribute("#mFiles a.button-like.primary", "href") == "https://www.myminifactory.com/object/3d-print-2"
+    app.click("#mmfImport")
+    app.wait_for_selector("#importDlg[open]")
+    assert app.input_value("#uploadFolder") == "Ancient Wyrm" and app.input_value("#uploadCreator") == "Dragon Forge"
     if SHOTS:
-        app.screenshot(path=f"{SHOTS}/mmf-modal-queued.png")
+        app.screenshot(path=f"{SHOTS}/mmf-import.png")
     app.keyboard.press("Escape")
-    post("/api/mmf/4/queue", {"queued": True})
-    assert [q["id"] for q in get("/api/mmf/queue")] == [2, 4]
-    assert get("/api/mmf/queue")[0]["folder"] == "Dragon Forge/Ancient Wyrm"
-
-    # The next bookmarklet run downloads them with the MyMiniFactory login and uploads them.
-    popup.close()
-    with ctx.expect_page() as popup_info:
-        mmf.evaluate(urllib.request.unquote(href[len("javascript:"):]))
-    popup = popup_info.value
-    popup.wait_for_function("document.getElementById('msg').textContent.includes('Downloaded')", timeout=30000)
-    print("download sync:", popup.text_content("#msg"))
-    for _ in range(60):
-        if get("/api/models?q=wyrm")["total"] and not get("/api/status")["job"]["running"]:
-            break
-        time.sleep(0.5)
-    wyrm = get("/api/models?q=wyrm")["items"]
-    assert wyrm and wyrm[0]["release"] == "Ancient Wyrm" and wyrm[0]["creator"] == "Dragon Forge", wyrm
-    item = get("/api/mmf/2")
-    assert item["local"] and not item["queued"] and not item["download_note"], item
-    tower = get("/api/mmf/4")
-    assert tower["queued"] and "web page" in tower["download_note"], tower
-    assert get("/api/mmf/status")["queued"] == 1
-    post("/api/mmf/4/queue", {"queued": False})
 
     popup.close()
     # A later sync where purchases drop an item replaces them; pledges failing keeps the old ones.
@@ -366,16 +326,6 @@ with sync_playwright() as p:
     assert items[11]["creator"] == "Orc Works" and items[11]["image"].endswith("/230X230-p.png"), items[11]
     assert items[1]["local"], "still matches the local Lich King"
 
-    # Downloads use the archives the Library lists for an item.
-    post("/api/mmf/12/queue", {"queued": True})
-    popup.close()
-    popup = sync("Downloaded")
-    for _ in range(60):
-        if get("/api/models?q=paladin")["total"] and not get("/api/status")["job"]["running"]:
-            break
-        time.sleep(0.5)
-    assert get("/api/models?q=paladin")["total"], "the MMF+ item was downloaded into the library"
-    assert not get("/api/mmf/12")["queued"]
     browser.close()
 
 print("MMF OK")

@@ -126,10 +126,10 @@ groups them by **release** and **model**, separates **supported** and
   That covers purchases, pledges, tribes, creator groups, MMF+ and free
   downloads. Items are listed with their images, creator, the release they came
   in (tribe month, campaign, group or MMF+ release) and a link to
-  MyMiniFactory, and open in the model window like your own models. *Download to
-  library* in that window marks an item; the next time you click the bookmark on
-  myminifactory.com it downloads the marked items with your login and the Resin
-  Models window it opens saves them into the library as Creator / Item. Your
+  MyMiniFactory, and open in the model window like your own models. MyMiniFactory
+  only lets your browser download the files, so the window has *Download on
+  MyMiniFactory* and *Import the download…*, which opens Import files with the
+  item as the release and its creator filled in. Your
   MyMiniFactory login is never stored by the app. The first time the bookmark
   sees an item it also reads all its listing images in full size from
   MyMiniFactory (the library list only has one or two; a big first sync reads
