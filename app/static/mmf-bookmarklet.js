@@ -158,7 +158,7 @@
   // plain download link.
   async function archivesOf(id) {
     try {
-      var d = await api("/api/data-library/myObjects/" + encodeURIComponent(id) + "/downloadables");
+      var d = await api("/api/data-library/myObjects/object-" + encodeURIComponent(id) + "/downloadables");
       var out = list(d && d.archives).filter(function (a) { return a && a.id != null; }).map(function (a) {
         return { url: "/download/" + encodeURIComponent(id) + "?archive_id=" + encodeURIComponent(a.id),
                  name: String(a.name || a.filename || a.path || "").split("/").pop() };
@@ -218,19 +218,27 @@
           try {
             var rel = await api(base + releasesPath + encodeURIComponent(o.id));
             var rels = Array.isArray(rel) ? rel : list(rel.pledges).concat(list(rel.addons));
-            rels.forEach(function (x) { if (x && x.id != null) names[label + ":" + x.id] = nameOf(o, x.label || x.name || ""); });
+            rels.forEach(function (x) {
+              if (!x || x.id == null) return;
+              names[label + ":" + x.id] = nameOf(o, x.label || x.name || "");
+              names[label + ":of:" + x.id] = o;
+            });
             names[label + ":owner:" + o.id] = o.name || "";
           } catch (err) { problems.push(label + " " + (o.name || o.id) + ": " + err.message); }
         }
       } catch (err) { problems.push(label + ": " + err.message); }
     }
-    await each("tribes_metadata", "tribe_releases_metadata/", "tribe", function (o, l) { return [o.name, l].filter(Boolean).join(" · "); });
+    await each("tribes_metadata", "tribe_releases_metadata/", "tribe", function (o, l) { return l; });
     await each("userGroups_metadata", "userGroup_releases_metadata/", "group", function (o, l) { return l || o.name; });
     await each("frontiers_metadata", "frontier_releases_metadata/", "pledge", function (o) { return o.name; });
     try {
       list(await api(base + "mmfplus_releases_metadata")).forEach(function (x) { names["mmfplus:" + x.id] = x.label || x.name || ""; });
     } catch (err) { problems.push("MMF+: " + err.message); }
     return names;
+  }
+  function field(release, key) {  // "type:campaign-tier;orderId:1;tierId:83699" -> "83699"
+    var m = new RegExp("(?:^|;)" + key + ":([^;]+)").exec(release == null ? "" : String(release));
+    return m && m[1];
   }
   async function readLibrary(items, complete, problems) {
     var previews = list(await api("/api/data-library/objectPreviews"));
@@ -247,17 +255,48 @@
         list(await api("/api/data-library/objects?" + q)).forEach(function (d) { if (d) details[d.originalId] = d; });
       } catch (err) { problems.push("item details: " + err.message); }
     }
+    // Bundles bought from the store: their names, for the parts listed one by one.
+    var bundleIds = {};
+    previews.forEach(function (p) {
+      var b = field(p.release, "bundleId") || p.bundleId;
+      if (b) bundleIds[b] = 1;
+    });
+    var bundles = {}, bids = Object.keys(bundleIds);
+    for (var j = 0; j < bids.length; j += 100) {
+      try {
+        var bq = bids.slice(j, j + 100).map(function (id) { return "ids[]=" + encodeURIComponent(id); }).join("&");
+        var got = await api("/api/data-library/bundles_metadata?" + bq);
+        (Array.isArray(got) ? got : list(got)).forEach(function (b) { if (b && b.id != null) bundles[b.id] = b.name || b.label || b.title || ""; });
+      } catch (err) { problems.push("bundle names: " + err.message); }
+    }
+    // Tribes are named after the creator's account ("midguardminiatures's Tribe"); use their display name.
+    var creatorById = {};
+    objects.forEach(function (p) {
+      var c = (details[p.originalId] || {}).creator || {};
+      if (p.creatorId != null && (c.name || p.creatorName)) creatorById[p.creatorId] = c.name || p.creatorName;
+    });
+    function releaseName(source, p) {
+      if (source === "pledge" && names["pledge:" + p.release] === undefined) return names["pledge:owner:" + p.campaignId];
+      var label = names[source + ":" + p.release];
+      if (label !== undefined && source === "tribe") {
+        var t = names["tribe:of:" + p.release] || {};
+        var who = creatorById[t.id] ? creatorById[t.id] + "'s Tribe" : t.name;
+        return [who, label].filter(Boolean).join(" · ");
+      }
+      if (label !== undefined) return label;
+      // Tribe and store entries bought through a campaign or as a bundle say so in their release.
+      var tier = field(p.release, "tierId"), bundle = field(p.release, "bundleId") || p.bundleId;
+      return (tier && names["pledge:" + tier]) || (bundle && bundles[bundle]) || "";
+    }
     objects.forEach(function (p) {
       var source = KINDS[p.source];
       if (!source) return;
       var d = details[p.originalId] || {}, creator = d.creator || {};
-      var key = source === "pledge" ? (names["pledge:" + p.release] !== undefined ? "pledge:" + p.release : "pledge:owner:" + p.campaignId)
-        : source + ":" + p.release;
       var pics = [d.previewUrl].concat(list(d.images).map(function (im) { return im && im.url; })).filter(Boolean);
       var thumb = list(d.images).map(function (im) { return im && (im.thumbnailUrl || im.url); }).filter(Boolean)[0];
       items.push({
         id: p.originalId, name: d.name || p.name, source: source,
-        collection: p.release != null || p.campaignId != null ? names[key] || "" : "",
+        collection: p.release != null || p.campaignId != null || p.bundleId != null ? releaseName(source, p) || "" : "",
         creator: creator.name || p.creatorName || creator.username || p.creatorUsername || "",
         creator_url: creator.username ? "https://www.myminifactory.com/users/" + encodeURIComponent(creator.username) : "",
         url: d.url ? "https://www.myminifactory.com/object/3d-print-" + d.url : "/object/" + p.originalId,

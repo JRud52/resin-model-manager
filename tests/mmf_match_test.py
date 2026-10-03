@@ -23,6 +23,9 @@ LOCAL = [  # creator, release, model
     ("Titan Forge", "Witch - With Free Dragon Warhammer Mini", "Witch"),
     ("DM Stash", "Elf Wizard", "Elf Wizard"),
     ("Bite The Bullet", "BTB 39 23-09 Explorers Fellowship", "Ranger"),
+    ("Lord of the Print", "Welcome Pack", "Goblins"),
+    ("Titan Forge", "Rogues", "Halfling Male Rogue"),
+    ("Titan Forge", "Armoury", "Weapon"),
     ("", "Lich_King_Presupported", "Lich King"),
 ]
 c = db.conn()
@@ -46,6 +49,12 @@ CASES = [  # MyMiniFactory title, creator, expected release (None = not in the l
     ("Zelina the Witch Empress - Female Sorceress", "TitanForge", None),  # one word of a long title
     ("Wood Elf Queen Sillavana (Elf Wizard Druid)", "TwinGoddessMini", None),  # another creator's model
     ("Explorers Fellowship", "Bite the Bullet", "BTB 39 23-09 Explorers Fellowship"),
+    ("Welcome Pack", "Cast n Play", None),                  # every tribe has one
+    ("Goblins (Pre-Supported)", "Cast n Play", None),       # one word, another creator
+    ("Weapon Pack", "WargamesCrew", None),
+    ("25mm Base for Miniatures", "Fireball Figurines", None),
+    ("Halfling Rogue", "Nerikson", None),                   # close, but another creator
+    ("Welcome Pack", "Lord of the Print", "Welcome Pack"),  # the creator's own
 ]
 bad = 0
 for title, creator, want in CASES:

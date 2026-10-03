@@ -65,7 +65,11 @@ PREVIEWS = [
      "creatorName": "Dragon Forge"},
     {"originalId": 3, "id": "bundle-3", "type": "bundle", "name": "Some Bundle", "source": "PURCHASE"},
     {"originalId": 5, "id": "object-5", "type": "object", "name": "Goblin Boss", "source": "TRIBE",
-     "release": TRIBE_RELEASE, "creatorName": "MiniForge"},
+     "release": TRIBE_RELEASE, "creatorName": "MiniForge", "creatorId": 9},
+    {"originalId": 14, "id": "object-14", "type": "object", "name": "Tadpole Hero", "source": "TRIBE",
+     "release": "type:campaign-tier;orderId:5;tierId:901", "creatorName": "Frog Folk"},
+    {"originalId": 15, "id": "object-15", "type": "object", "name": "Shroud Arm", "source": "PURCHASE",
+     "release": "type:store-bundle;orderId:6;bundleId:1123", "creatorName": "Fleshcraft"},
     {"originalId": 11, "id": "object-11", "type": "object", "name": "Orc Warlord", "source": "USER_GROUP",
      "release": "32391", "creatorName": "Orc Works"},
     {"originalId": 12, "id": "object-12", "type": "object", "name": "Plus Paladin", "source": "MMFPLUS", "release": "39939"},
@@ -81,7 +85,8 @@ NEW_META = {
     "mmfplus_releases_metadata": [{"id": 39939, "label": "September 2023 MMF+ Release"}],
     "frontiers_metadata": [{"id": 555, "name": "Frog Kingdom"}],
     "frontier_releases_metadata/555": {"pledges": [{"id": 901, "name": "Tadpole"}], "addons": []},
-    "myObjects/12/downloadables": {"archives": [{"id": 77, "name": "paladin.zip"}], "pdfs": [], "parts": []},
+    "bundles_metadata": [{"id": 1123, "name": "Shroudborne"}],
+    "myObjects/object-12/downloadables": {"archives": [{"id": 77, "name": "paladin.zip"}], "pdfs": [], "parts": []},
 }
 
 
@@ -231,6 +236,7 @@ with sync_playwright() as p:
     assert "Castle Siege" not in app.locator(".side-title[data-sec='releases']").inner_text(), "selection reset on reload"
     app.click(".side-title[data-sec='releases']")
     # Long lists show their first 8 entries and "Show all"; the filter box finds the rest.
+    app.wait_for_function("document.querySelectorAll(\"#releases > li[data-r]:not(.cut):not([data-r=''])\").length === 8")
     rows = app.locator("#releases > li[data-r]:not([data-r=''])").count()
     assert rows > 8 and app.locator("#releases > li[data-r]:not(.cut):not([data-r=''])").count() == 8
     assert app.locator("#releases li[data-r='Kickstarter: Castle Siege']").is_hidden()
@@ -348,10 +354,12 @@ with sync_playwright() as p:
         return win
     popup = sync()
     s = get("/api/mmf/status")
-    assert s["total"] == 5 and s["sources"] == {"purchase": 1, "tribe": 1, "group": 1, "mmfplus": 1, "free": 1, "pledge": 1}, s
+    assert s["total"] == 7 and s["sources"] == {"purchase": 2, "tribe": 2, "group": 1, "mmfplus": 1, "free": 1, "pledge": 1}, s
     items = {m["id"]: m for m in get("/api/mmf")["items"]}
-    assert items[5]["sources"] == [{"source": "tribe", "collection": "Greenskin Tribe · 09/2023 | tier: Elders"}], items[5]
+    assert items[5]["sources"] == [{"source": "tribe", "collection": "MiniForge's Tribe · 09/2023 | tier: Elders"}], items[5]
     assert items[11]["sources"][0]["collection"] == "38. OPR April 2023 Rewards", items[11]
+    assert items[14]["sources"][0]["collection"] == "Frog Kingdom", items[14]  # bought through the campaign
+    assert items[15]["sources"][0]["collection"] == "Shroudborne", items[15]   # part of a store bundle
     assert items[12]["sources"][0]["collection"] == "September 2023 MMF+ Release", items[12]
     assert sorted((x["source"], x["collection"]) for x in items[13]["sources"]) == [("free", ""), ("pledge", "Frog Kingdom")]
     assert items[1]["url"] == "https://www.myminifactory.com/object/3d-print-thing-1", items[1]
