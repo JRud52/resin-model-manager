@@ -84,6 +84,10 @@ groups them by **release** and **model**, separates **supported** and
   to go back to the folder guess. *No creator* at the top of the Creators list
   shows the releases still missing one: setting a creator there moves straight
   on to the next, and *Set creator for several* lists only those releases.
+  If a creator's name shows up oddly (a folder or account name like
+  `the-printing-goes-ever-on`), click the creator and use *Rename creator*: the
+  new name is used for their releases and MyMiniFactory items, and kept across
+  re-indexing and syncs. *Undo renames* goes back to the original name.
 * **Previews.** STLs are rendered by a built-in CPU renderer (numpy, no GPU or
   OpenGL needed) and cached as WebP images in `data/previews`. Files inside
   archives are rendered straight from the archive without extracting them into

@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS model_tags (
 );
 CREATE INDEX IF NOT EXISTS model_tags_tag ON model_tags(tag);
 
+-- Creator names corrected in the app ("the-printing-goes-ever-on" -> "The Print
+-- Goes Ever On"). Keyed on mmf.creator_key of the name as found (folder, import,
+-- release setting or MyMiniFactory), so it applies again after every re-index or sync.
+CREATE TABLE IF NOT EXISTS creator_names (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
 -- Picture chosen in the app as the main picture of a release (key = release
 -- name) or of a model (key = model_id). Stored by the picture's logical path so
 -- it survives re-indexing; if the picture disappears the automatic pick is used.

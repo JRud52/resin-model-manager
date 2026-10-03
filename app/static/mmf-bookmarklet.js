@@ -87,7 +87,8 @@
       images: pictures(o), downloads: downloads(o),
       id: o.id, name: o.name, source: source,
       collection: collection || (pledge && pledge.name) || "",
-      creator: o.user_name || o.username || (o.designer && (o.designer.name || o.designer.username)) || "",
+      // Display name first ("The Print Goes Ever On"), the account slug only as a fallback.
+      creator: (o.designer && o.designer.name) || o.user_name || o.username || (o.designer && o.designer.username) || "",
       creator_url: o.user_url || "", url: o.absolute_url || o.url || o.show_url || "", image: picture(o)
     };
   }

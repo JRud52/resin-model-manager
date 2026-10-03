@@ -13,7 +13,7 @@ import traceback
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
 
-from . import archives, classify, config, db, render, settings
+from . import archives, classify, config, db, mmf, render, settings
 
 log = logging.getLogger("rmm")
 
@@ -442,6 +442,7 @@ def _context(c, extra_map=None):
 
 def _classify(rows, overrides, release_creators, reader) -> list[list]:
     """[creator, release, model, model_id, option, supported, model_root, hidden, id] per row."""
+    names = mmf.creator_names()
     updates = []
     for r in rows:
         lp = r["logical_path"]
@@ -458,7 +459,7 @@ def _classify(rows, overrides, release_creators, reader) -> list[list]:
                     supported = None if o["supported"] == -1 else bool(o["supported"])
                     set_unknown = o["supported"] == -1
                 hidden = o["hidden"] if o["hidden"] is not None else hidden
-        creator = release_creators.get(release.lower(), creator)
+        creator = mmf.display_creator(release_creators.get(release.lower(), creator), names)
         combined = reader.combined.get((release.lower(), model_key(model)))
         if combined:  # the former model becomes an option group of the combined one
             model, option = combined[0], " / ".join(filter(None, (combined[1], option)))

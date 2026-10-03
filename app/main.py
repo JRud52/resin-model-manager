@@ -381,6 +381,22 @@ def creators(q: str = "", tags: str = ""):
     return out
 
 
+class CreatorRenameIn(BaseModel):
+    creator: str     # the name as shown now
+    name: str = ""   # how to show it; blank undoes earlier renames
+
+
+@app.post("/api/creators/rename")
+def rename_creator(body: CreatorRenameIn):
+    """Change how a creator is shown, everywhere (local releases and MyMiniFactory items).
+    Stored by the creator's loose name key, so it is kept across re-indexing and syncs."""
+    if not body.creator.strip():
+        raise HTTPException(400, "creator is required")
+    name = mmf.rename_creator(body.creator, body.name)
+    library.reclassify()
+    return {"creator": name}
+
+
 class CreatorIn(BaseModel):
     releases: list[str]
     creator: str = ""  # blank goes back to the folder guess or import rule
