@@ -127,6 +127,8 @@ def _tokens(name: str) -> set[str]:
         w = _MONTHS.get(w, w)
         if w.isdigit():
             w = str(int(w))
+        if re.fullmatch(r"[0-9a-f]{8,}", w) and re.search(r"\d", w):
+            continue  # an upload id ("602ab09167439 angel-fighter"), not part of the name
         if w not in _GENERIC and not re.fullmatch(r"\d+mm", w):  # 32mm: a scale, not a name
             out.add(w)
     return out

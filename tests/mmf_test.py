@@ -85,7 +85,7 @@ NEW_META = {
     "mmfplus_releases_metadata": [{"id": 39939, "label": "September 2023 MMF+ Release"}],
     "frontiers_metadata": [{"id": 555, "name": "Frog Kingdom"}],
     "frontier_releases_metadata/555": {"pledges": [{"id": 901, "name": "Tadpole"}], "addons": []},
-    "bundles_metadata": [{"id": 1123, "name": "Shroudborne"}],
+    "bundles_metadata": [{"id": "bundle-1123", "originalId": 1123, "name": "Shroudborne"}],
     "myObjects/object-12/downloadables": {"archives": [{"id": 77, "name": "paladin.zip"}], "pdfs": [], "parts": []},
 }
 

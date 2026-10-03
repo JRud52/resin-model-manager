@@ -266,7 +266,10 @@
       try {
         var bq = bids.slice(j, j + 100).map(function (id) { return "ids[]=" + encodeURIComponent(id); }).join("&");
         var got = await api("/api/data-library/bundles_metadata?" + bq);
-        (Array.isArray(got) ? got : list(got)).forEach(function (b) { if (b && b.id != null) bundles[b.id] = b.name || b.label || b.title || ""; });
+        (Array.isArray(got) ? got : list(got)).forEach(function (b) {  // id "bundle-1123", originalId 1123
+          var id = b && (b.originalId != null ? b.originalId : String(b.id).replace(/^bundle-/, ""));
+          if (id != null) bundles[id] = b.name || b.label || b.title || "";
+        });
       } catch (err) { problems.push("bundle names: " + err.message); }
     }
     // Tribes are named after the creator's account ("midguardminiatures's Tribe"); use their display name.

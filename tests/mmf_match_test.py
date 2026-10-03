@@ -56,6 +56,7 @@ CASES = [  # MyMiniFactory title, creator, expected release (None = not in the l
     ("25mm Base for Miniatures", "Fireball Figurines", None),
     ("Halfling Rogue", "Nerikson", None),                   # close, but another creator
     ("Welcome Pack", "Lord of the Print", "Welcome Pack"),  # the creator's own
+    ("Angel Fighter", "Rescale Miniatures", "Welcome Pack"),  # the upload id in the local name doesn't count
 ]
 bad = 0
 for title, creator, want in CASES:
@@ -67,8 +68,8 @@ for title, creator, want in CASES:
 assert not bad, f"{bad} wrong matches"
 
 # A creator renamed in the app is one creator: Lord of the Print now goes by Rescale Miniatures.
-assert not index.match("Angel Fighter", "Rescale Miniatures")
+assert not index.match("Halfling Rogue", "Nerikson")
 mmf.rename_creator("Lord of the Print", "Rescale Miniatures")
-got = mmf._local_index().match("Angel Fighter", "Rescale Miniatures")
+got = mmf._local_index().match("Goblins (Pre-Supported)", "Rescale Miniatures")
 assert got and got["release"] == "Welcome Pack", got
 print("MATCH OK")
