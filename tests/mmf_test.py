@@ -56,9 +56,62 @@ def page_of(items, page, size=2):
     return {"total_count": len(items), "items": items[(page - 1) * size:page * size]}
 
 
+# The library as the site reads it since 2026: one list, release names from metadata lists,
+# details from /api/data-library/objects. Switched on for the last part of the test.
+NEW_API = []
+TRIBE_RELEASE = "type:tribes-tier;owner:77;tribe:9;tier:1;yearmonth:202309"
+PREVIEWS = [
+    {"originalId": 1, "id": "object-1", "type": "object", "name": "Lich King - Supported", "source": "PURCHASE",
+     "creatorName": "Dragon Forge"},
+    {"originalId": 3, "id": "bundle-3", "type": "bundle", "name": "Some Bundle", "source": "PURCHASE"},
+    {"originalId": 5, "id": "object-5", "type": "object", "name": "Goblin Boss", "source": "TRIBE",
+     "release": TRIBE_RELEASE, "creatorName": "MiniForge"},
+    {"originalId": 11, "id": "object-11", "type": "object", "name": "Orc Warlord", "source": "USER_GROUP",
+     "release": "32391", "creatorName": "Orc Works"},
+    {"originalId": 12, "id": "object-12", "type": "object", "name": "Plus Paladin", "source": "MMFPLUS", "release": "39939"},
+    {"originalId": 13, "id": "object-13", "type": "object", "name": "Free Frog", "source": "DOWNLOAD"},
+    {"originalId": 13, "id": "object-13", "type": "object", "name": "Free Frog", "source": "FRONTIER",
+     "campaignId": 555, "release": "901"},
+]
+NEW_META = {
+    "tribes_metadata": [{"id": 9, "name": "Greenskin Tribe"}],
+    "tribe_releases_metadata/9": [{"id": TRIBE_RELEASE, "label": "09/2023 | tier: Elders"}, {"id": "w", "label": "Welcome Pack"}],
+    "userGroups_metadata": [{"id": 4, "name": "Orc Works"}],
+    "userGroup_releases_metadata/4": [{"id": 32391, "label": "38. OPR April 2023 Rewards"}],
+    "mmfplus_releases_metadata": [{"id": 39939, "label": "September 2023 MMF+ Release"}],
+    "frontiers_metadata": [{"id": 555, "name": "Frog Kingdom"}],
+    "frontier_releases_metadata/555": {"pledges": [{"id": 901, "name": "Tadpole"}], "addons": []},
+    "myObjects/12/downloadables": {"archives": [{"id": 77, "name": "paladin.zip"}], "pdfs": [], "parts": []},
+}
+
+
+def new_api(url):
+    from urllib.parse import parse_qs, unquote, urlparse
+    u = urlparse(url)
+    path = unquote(u.path)[len("/api/data-library/"):]
+    if path == "objectPreviews":
+        return PREVIEWS
+    if path == "objects":
+        ids = parse_qs(u.query).get("ids[]", [])
+        return [{"originalId": int(i), "name": next(p["name"] for p in PREVIEWS if str(p["originalId"]) == i),
+                 "url": f"thing-{i}", "creator": {"username": f"maker-{i}", "name": "" if i == "12" else None},
+                 "previewUrl": f"{CDN}/object-images/p{i}/images/1000X1000-p.png",
+                 "images": [{"url": f"{CDN}/object-images/p{i}/images/720X720-p.png",
+                             "thumbnailUrl": f"{CDN}/object-images/p{i}/images/230X230-p.png"}]} for i in ids]
+    return NEW_META.get(path)
+
+
 def fake_mmf(route):
     url = route.request.url
     page = int(url.split("page=")[1]) if "page=" in url else 1
+    if NEW_API and "/api/data-library/" in url:
+        body = new_api(url)
+        if body is None:
+            return route.fulfill(status=404, body="{}")
+        return route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    if NEW_API and "/download/12?archive_id=77" in url:
+        return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
+                             headers={"Content-Disposition": 'attachment; filename="paladin.zip"'})
     if "/data-library/purchases" in url:
         body = page_of(PURCHASES, page)
     elif "/data-library/campaigns" in url:
@@ -281,6 +334,40 @@ with sync_playwright() as p:
     print("second sync:", popup.text_content("#msg"))
     s = get("/api/mmf/status")
     assert s["sources"] == {"purchase": 2, "pledge": 1, "tribe": 2}, s
+
+    # The whole library from the new list: every source, release names, one item in two sources.
+    popup.close()
+    NEW_API.append(1)
+    def sync(done="Synced"):
+        with ctx.expect_page() as info:
+            mmf.evaluate(urllib.request.unquote(href[len("javascript:"):]))
+        win = info.value
+        win.wait_for_function("(t) => document.getElementById('msg').textContent.includes(t) && "
+                              "!document.getElementById('msg').textContent.includes('Reading')", arg=done, timeout=30000)
+        print("sync:", win.text_content("#msg"))
+        return win
+    popup = sync()
+    s = get("/api/mmf/status")
+    assert s["total"] == 5 and s["sources"] == {"purchase": 1, "tribe": 1, "group": 1, "mmfplus": 1, "free": 1, "pledge": 1}, s
+    items = {m["id"]: m for m in get("/api/mmf")["items"]}
+    assert items[5]["sources"] == [{"source": "tribe", "collection": "Greenskin Tribe · 09/2023 | tier: Elders"}], items[5]
+    assert items[11]["sources"][0]["collection"] == "38. OPR April 2023 Rewards", items[11]
+    assert items[12]["sources"][0]["collection"] == "September 2023 MMF+ Release", items[12]
+    assert sorted((x["source"], x["collection"]) for x in items[13]["sources"]) == [("free", ""), ("pledge", "Frog Kingdom")]
+    assert items[1]["url"] == "https://www.myminifactory.com/object/3d-print-thing-1", items[1]
+    assert items[11]["creator"] == "Orc Works" and items[11]["image"].endswith("/230X230-p.png"), items[11]
+    assert items[1]["local"], "still matches the local Lich King"
+
+    # Downloads use the archives the Library lists for an item.
+    post("/api/mmf/12/queue", {"queued": True})
+    popup.close()
+    popup = sync("Downloaded")
+    for _ in range(60):
+        if get("/api/models?q=paladin")["total"] and not get("/api/status")["job"]["running"]:
+            break
+        time.sleep(0.5)
+    assert get("/api/models?q=paladin")["total"], "the MMF+ item was downloaded into the library"
+    assert not get("/api/mmf/12")["queued"]
     browser.close()
 
 print("MMF OK")

@@ -15,7 +15,7 @@ import unicodedata
 
 from . import classify, db
 
-SOURCES = ("purchase", "pledge", "tribe")
+SOURCES = ("purchase", "pledge", "tribe", "group", "mmfplus", "free")
 MAX_ITEMS = 50_000
 
 
@@ -212,8 +212,12 @@ class _Index:
             contained = common == min(len(toks), len(etoks))
             if not same_creator and all(w.isdigit() for w in toks & etoks):
                 continue  # "September 2023" alone says nothing without the creator
-            ok = (jaccard >= 0.6 or (contained and common >= 2)
-                  or (contained and same_creator and any(len(w) >= 5 for w in toks & etoks)))
+            # Two different known creators only match on nearly the same name. A shorter name inside
+            # a longer one needs two shared words, or the same creator and a name of at most two words
+            # ("Witch" alone isn't "Zelina the Witch Empress").
+            other_creator = bool(ckey) and bool(ekey) and not same_creator
+            ok = jaccard >= 0.6 or (not other_creator and contained and (
+                common >= 2 or (same_creator and jaccard >= 0.5 and any(len(w) >= 5 for w in toks & etoks))))
             if not ok:
                 continue
             score = jaccard + (0.3 if same_creator else 0) + (0.05 if model_id is None else 0)

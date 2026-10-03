@@ -20,6 +20,9 @@ LOCAL = [  # creator, release, model
     ("Archvillain Games", "2023-09 Ironclad Dwarves", "Dwarf Captain"),
     ("Mini Forge", "Dragon Lords", "Red Dragon"),
     ("Mini Forge", "Dragon Lords", "Knight"),
+    ("Titan Forge", "Witch - With Free Dragon Warhammer Mini", "Witch"),
+    ("DM Stash", "Elf Wizard", "Elf Wizard"),
+    ("Bite The Bullet", "BTB 39 23-09 Explorers Fellowship", "Ranger"),
     ("", "Lich_King_Presupported", "Lich King"),
 ]
 c = db.conn()
@@ -40,6 +43,9 @@ CASES = [  # MyMiniFactory title, creator, expected release (None = not in the l
     ("September 2023 Release", "Another Creator", None),  # only a date in common
     ("Black Knight", "Another Creator", None),            # one shared everyday word
     ("Frost Giant Jarl", "Bestiarum Miniatures", "Bestiarum - October 2023"),
+    ("Zelina the Witch Empress - Female Sorceress", "TitanForge", None),  # one word of a long title
+    ("Wood Elf Queen Sillavana (Elf Wizard Druid)", "TwinGoddessMini", None),  # another creator's model
+    ("Explorers Fellowship", "Bite the Bullet", "BTB 39 23-09 Explorers Fellowship"),
 ]
 bad = 0
 for title, creator, want in CASES:

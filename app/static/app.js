@@ -311,7 +311,7 @@ async function refresh() { loadCreators(); loadTags(); loadMmfSide(); await load
 
 // ------------------------------------------------------------ MyMiniFactory
 
-const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe" };
+const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe", group: "Group", mmfplus: "MMF+", free: "Free" };
 
 async function loadMmfSide() {
   const s = await api("/api/mmf/status");
@@ -320,7 +320,7 @@ async function loadMmfSide() {
       <span class="name">${label}</span><span class="muted">${n}</span></li>`;
   $("#mmfList").innerHTML = s.total
     ? li(false, "All items", s.total) + li(true, "Not in your library", s.missing)
-    : `<li class="muted small" style="cursor:default"><span>Click <b>Sync</b> to list your purchases, pledges and tribes here.</span></li>`;
+    : `<li class="muted small" style="cursor:default"><span>Click <b>Sync</b> to list your MyMiniFactory library here.</span></li>`;
 }
 $("#mmfList").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-mmf-missing]"); if (!li) return;
