@@ -222,6 +222,10 @@ with sync_playwright() as p:
     assert app.locator("#releases li[data-r='Kickstarter: Castle Siege']").is_hidden()
     app.click("#releases .show-more")
     app.wait_for_selector("#releases li[data-r='Kickstarter: Castle Siege']")
+    app.reload()  # "Show all" lasts until the next reload
+    app.wait_for_function("document.querySelectorAll(\"#releases > li[data-r]:not(.cut):not([data-r=''])\").length === 8")
+    app.click("#releases .show-more")
+    app.wait_for_selector("#releases li[data-r='Kickstarter: Castle Siege']")
     app.click("#releases .show-more")  # "Show fewer"
     app.fill(".side-filter input[data-for='releases']", "kickstarter")
     assert app.locator("#releases > li[data-r]:not(.cut):not([data-r=''])").count() == 1
