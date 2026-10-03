@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 
 from . import classify, db
 
@@ -101,48 +102,145 @@ def clear():
         c.execute("DELETE FROM settings WHERE key='mmf_synced'")
 
 
-def _local_index() -> tuple[dict, dict]:
-    """name key -> local release, and name key -> (release, model_id) for models."""
-    releases, models = {}, {}
-    for r in db.conn().execute("SELECT release, model, MIN(model_id) model_id FROM files WHERE hidden=0 "
-                               "GROUP BY release, model"):
-        releases.setdefault(classify.name_key(r["release"]), r["release"])
-        models.setdefault(classify.name_key(r["model"]), (r["release"], r["model_id"]))
-    releases.pop("", None)
-    models.pop("", None)
-    return releases, models
+# ---------------------------------------------------------------- matching to the local library
+
+# Words in shop titles that don't name the thing itself.
+_GENERIC = {
+    "bundle", "release", "releases", "collection", "pack", "set", "kit", "miniature", "miniatures",
+    "mini", "minis", "figure", "figures", "tabletop", "wargaming", "wargame", "dnd", "rpg", "of", "a", "an",
+    "with", "by", "in", "x", "edition", "complete", "full", "patreon", "tribe", "kickstarter", "ks",
+}
+_MONTHS = {m: str(i) for i, ms in enumerate((
+    ("january", "jan"), ("february", "feb"), ("march", "mar"), ("april", "apr"), ("may",), ("june", "jun"),
+    ("july", "jul"), ("august", "aug"), ("september", "sep", "sept"), ("october", "oct"),
+    ("november", "nov"), ("december", "dec")), 1) for m in ms}
 
 
-def _match(name: str, releases: dict, models: dict):
-    key = classify.name_key(name)
-    if not key:
-        return None
-    if key in releases:
-        return {"release": releases[key], "model_id": None}
-    if key in models:
-        release, model_id = models[key]
-        return {"release": release, "model_id": model_id}
-    return None
+def _tokens(name: str) -> set[str]:
+    """Comparable words of a name: 'Dwarf_Warriors - Sept 2023 (Supported)' -> {dwarf, warriors, 9, 2023}."""
+    out = set()
+    for w in classify.name_key(name).split():
+        if re.fullmatch(r"(?:19|20)\d\d(?:0[1-9]|1[0-2])", w):  # 202309
+            out.update((w[:4], str(int(w[4:]))))
+            continue
+        w = _MONTHS.get(w, w)
+        if w.isdigit():
+            w = str(int(w))
+        if w not in _GENERIC:
+            out.add(w)
+    return out
 
 
-def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200) -> dict:
-    c = db.conn()
+# Words that only say what kind of shop it is: "Bestiarum Miniatures" is "Bestiarum".
+_SHOP_WORDS = {"miniatures", "miniature", "minis", "studio", "studios", "official", "the"}
+
+
+def creator_key(name: str) -> str:
+    """Comparison key for creator names, so 'CobraMode', 'Cobra Mode' and 'cobra_mode!' are one creator:
+    accents and special characters ignored, CamelCase split into words, shop words left out."""
+    s = unicodedata.normalize("NFKD", str(name or ""))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", s)
+    words = re.findall(r"[a-z0-9]+", s.lower())
+    return "".join(w for w in words if w not in _SHOP_WORDS) or "".join(words)
+
+
+class _Index:
+    """Local releases and models by word, to match MyMiniFactory titles against."""
+
+    def __init__(self):
+        self.entries = []  # (tokens, creator tokens, creator key, release, model_id or None)
+        self.by_word: dict[str, list[int]] = {}
+        seen_releases = set()
+        for r in db.conn().execute("SELECT release, model, MAX(creator) creator, MIN(model_id) model_id "
+                                   "FROM files WHERE hidden=0 GROUP BY release, model"):
+            creator, ckey = _tokens(r["creator"] or ""), creator_key(r["creator"] or "")
+            if r["release"] not in seen_releases:
+                seen_releases.add(r["release"])
+                self._add(_tokens(r["release"]) - creator or _tokens(r["release"]), creator, ckey, r["release"], None)
+            self._add(_tokens(r["model"]) - creator or _tokens(r["model"]), creator, ckey, r["release"], r["model_id"])
+
+    def _add(self, toks, creator, ckey, release, model_id):
+        if not toks:
+            return
+        i = len(self.entries)
+        self.entries.append((toks, creator, ckey, release, model_id))
+        for w in toks:
+            self.by_word.setdefault(w, []).append(i)
+
+    def match(self, name: str, creator: str = ""):
+        ctoks, ckey = _tokens(creator), creator_key(creator)
+        toks = _tokens(name)
+        toks = toks - ctoks or toks
+        if not toks:
+            return None
+        best, best_score = None, 0.0
+        for i in {i for w in toks for i in self.by_word.get(w, ())}:
+            etoks, ecreator, ekey, release, model_id = self.entries[i]
+            common = len(toks & etoks)
+            jaccard = common / len(toks | etoks)
+            same_creator = bool(ckey) and (ckey == ekey or (bool(ctoks) and bool(ecreator)
+                                                         and (ctoks <= ecreator or ecreator <= ctoks)))
+            contained = common == min(len(toks), len(etoks))
+            if not same_creator and all(w.isdigit() for w in toks & etoks):
+                continue  # "September 2023" alone says nothing without the creator
+            ok = (jaccard >= 0.6 or (contained and common >= 2)
+                  or (contained and same_creator and any(len(w) >= 5 for w in toks & etoks)))
+            if not ok:
+                continue
+            score = jaccard + (0.3 if same_creator else 0) + (0.05 if model_id is None else 0)
+            if score > best_score:
+                best, best_score = {"release": release, "model_id": model_id}, score
+        return best
+
+
+_index_cache: tuple = (None, None)
+
+
+def _local_index() -> _Index:
+    """Built once per change of the indexed files (and corrections), not per request."""
+    global _index_cache
+    sig = tuple(db.conn().execute(
+        "SELECT COUNT(*), MAX(id), TOTAL(length(release) + length(model) + length(creator) + hidden) FROM files"
+    ).fetchone())
+    if _index_cache[0] != sig:
+        _index_cache = (sig, _Index())
+    return _index_cache[1]
+
+
+def _match(name: str, creator: str, index: _Index):
+    return index.match(name, creator)
+
+
+def _search(q: str) -> tuple[str, list]:
     where, args = [], []
     for word in q.split():
         where.append("(i.name LIKE ? OR i.creator LIKE ? OR i.id IN "
                      "(SELECT item_id FROM mmf_links WHERE collection LIKE ?))")
         args += [f"%{word}%"] * 3
-    rows = c.execute(f"""SELECT i.* FROM mmf_items i {"WHERE " + " AND ".join(where) if where else ""}
+    return ("WHERE " + " AND ".join(where) if where else ""), args
+
+
+def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
+          creator: str | None = None) -> dict:
+    """creator: only items by this creator (compared with creator_key; '' = items without one)."""
+    c = db.conn()
+    where, args = _search(q)
+    rows = c.execute(f"""SELECT i.* FROM mmf_items i {where}
                          ORDER BY i.creator COLLATE NOCASE, i.name COLLATE NOCASE""", args).fetchall()
+    if creator is not None:
+        key = creator_key(creator)
+        rows = [r for r in rows if creator_key(r["creator"]) == key]
     link_map: dict[int, list] = {}
     for r in c.execute("SELECT * FROM mmf_links ORDER BY source, collection"):
         link_map.setdefault(r["item_id"], []).append({"source": r["source"], "collection": r["collection"]})
-    releases, models = _local_index()
+    index = _local_index()
     out = []
     for r in rows:
         d = _item(r)
         d["sources"] = link_map.get(r["id"], [])
-        d["local"] = _match(r["name"], releases, models)
+        d["local"] = _match(r["name"], r["creator"], index)
         if missing and d["local"]:
             continue
         out.append(d)
@@ -151,10 +249,21 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200)
 
 def _item(r) -> dict:
     d = dict(r)
-    d["images"] = json.loads(d.get("images") or "[]") or ([d["image"]] if d.get("image") else [])
+    gallery = json.loads(d.pop("gallery", "") or "[]")
+    d["images"] = gallery or json.loads(d.get("images") or "[]") or ([d["image"]] if d.get("image") else [])
     d["downloads"] = len(json.loads(d.get("downloads") or "[]"))
     d["queued"] = bool(d.get("queued"))
     return d
+
+
+def creators(q: str = "") -> dict[str, dict]:
+    """creator_key -> {"creator": the most used spelling, "items": count} of the synced items."""
+    where, args = _search(q)
+    spellings: dict[str, dict[str, int]] = {}
+    for r in db.conn().execute(f"SELECT i.creator FROM mmf_items i {where}", args):
+        names = spellings.setdefault(creator_key(r["creator"]), {})
+        names[r["creator"]] = names.get(r["creator"], 0) + 1
+    return {k: {"creator": max(v, key=v.get), "items": sum(v.values())} for k, v in spellings.items()}
 
 
 def item(oid: int) -> dict | None:
@@ -165,7 +274,7 @@ def item(oid: int) -> dict | None:
     d = _item(r)
     d["sources"] = [dict(x) for x in c.execute(
         "SELECT source, collection FROM mmf_links WHERE item_id=? ORDER BY source, collection", (oid,))]
-    d["local"] = _match(r["name"], *_local_index())
+    d["local"] = _match(r["name"], r["creator"], _local_index())
     return d
 
 
@@ -196,6 +305,30 @@ def queue() -> list[dict]:
     return out
 
 
+def gallery_needed() -> list[dict]:
+    """Items whose page hasn't been read for its full-size images yet."""
+    return [{"id": r["id"], "url": r["url"], "image": r["image"]} for r in db.conn().execute(
+        "SELECT id, url, image FROM mmf_items WHERE gallery='' ORDER BY id")]
+
+
+def set_galleries(entries: list) -> int:
+    """Store the images the bookmarklet read from item pages: [{"id", "images": [url, ...]}]."""
+    rows = []
+    for e in entries[:MAX_ITEMS]:
+        if not isinstance(e, dict) or not isinstance(e.get("images"), list):
+            continue
+        try:
+            oid = int(e.get("id"))
+        except (TypeError, ValueError):
+            continue
+        images = list(dict.fromkeys(u for u in (_url(x) for x in e["images"][:60] if isinstance(x, str)) if u))
+        rows.append((json.dumps(images), oid))
+    c = db.conn()
+    with c:
+        c.executemany("UPDATE mmf_items SET gallery=? WHERE id=?", rows)
+    return len(rows)
+
+
 def download_result(oid: int, ok: bool, note: str):
     c = db.conn()
     with c:
@@ -210,8 +343,8 @@ def status() -> dict:
         "SELECT source, COUNT(DISTINCT item_id) n FROM mmf_links GROUP BY source")}
     missing = 0
     if total:
-        releases, models = _local_index()
-        missing = sum(1 for r in c.execute("SELECT name FROM mmf_items") if not _match(r["name"], releases, models))
+        index = _local_index()
+        missing = sum(1 for r in c.execute("SELECT name, creator FROM mmf_items") if not _match(r["name"], r["creator"], index))
     queued = c.execute("SELECT COUNT(*) FROM mmf_items WHERE queued=1").fetchone()[0]
     return {"total": total, "missing": missing, "sources": by_source, "queued": queued,
             "synced": float(synced[0]) if synced else None}

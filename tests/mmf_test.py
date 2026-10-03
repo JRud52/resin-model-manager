@@ -24,8 +24,8 @@ def obj(i, name, creator="Dragon Forge", **extra):
 WYRM_PICS = {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/2.png"}}, {"large": {"url": f"{CDN}/7.png"}},
                        {"standard": {"url": f"{CDN}/8.png"}}]}
 PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS, archive_download_url="/download/2"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
-PLEDGES = [obj(4, "Siege Tower", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
-TRIBE = [obj(5, "Goblin Boss", creator="Greenskins"), obj(6, "Goblin Shaman", creator="Greenskins")]
+PLEDGES = [obj(4, "Siege Tower", creator="Castle_Works!", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
+TRIBE = [obj(5, "Goblin Boss", creator="MiniForge"), obj(6, "Goblin Shaman", creator="MiniForge")]  # "Mini Forge" here
 
 def png(i):
     from io import BytesIO
@@ -62,6 +62,14 @@ def fake_mmf(route):
                          "groups": {"items": [{"id": "all/9", "name": "All"}, {"id": "42", "name": "March"}]}}], page)
     elif "/data-library/group/42" in url:
         body = page_of(TRIBE, page)
+    elif url.endswith("/object/3d-print-2"):  # the item's page has every image, in several sizes
+        a = f"{CDN}/object-assets/aa2/images"
+        return route.fulfill(status=200, content_type="text/html", body=f"""<html><head>
+            <meta property="og:image" content="{a}/720X720-wyrm-a.png"></head><body>
+            <img src="{a}/230X230-wyrm-a.png"><img src="{a}/230X230-wyrm-b.png"><img src="{a}/230X230-wyrm-c.png">
+            <script>var data = {json.dumps({"images": [f"{a}/720X720-wyrm-b.png", f"{a}/wyrm-c.png",
+                                                       f"{a}/720X720-wyrm-c.png", f"{a}/720X720-wyrm-d.png"]})};</script>
+            <a href="/object/9"><img src="{CDN}/object-assets/bb9/images/230X230-other.png"></a></body></html>""")
     elif url.endswith("/download/2"):
         return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
                              headers={"Content-Disposition": 'attachment; filename="Ancient_Wyrm.zip"'})
@@ -83,7 +91,7 @@ with sync_playwright() as p:
     ctx = browser.new_context(viewport={"width": 1280, "height": 860})
     ctx.route("https://www.myminifactory.com/**", fake_mmf)
     ctx.route(f"{CDN}/**", lambda r: r.fulfill(
-        status=200, content_type="image/png", body=png(int(r.request.url.rsplit("/", 1)[1].split(".")[0]))))
+        status=200, content_type="image/png", body=png(sum(map(ord, r.request.url.rsplit("/", 1)[1])) % 7)))
     app = ctx.new_page()
     app.goto(BASE)
     app.click("#mmfSyncBtn")
@@ -116,6 +124,28 @@ with sync_playwright() as p:
     assert items["Ancient Wyrm"]["url"] == "https://www.myminifactory.com/object/3d-print-2"
     assert s["missing"] == 4, s
 
+    # MyMiniFactory creators join the creator filter, merged with local ones of nearly the same name.
+    creators = {c["creator"]: c for c in get("/api/creators")}
+    assert creators["Mini Forge"]["mmf"] == 2 and creators["Mini Forge"]["releases"], creators
+    assert "MiniForge" not in creators, creators
+    assert creators["Castle_Works!"]["releases"] == 0 and creators["Castle_Works!"]["mmf"] == 1, creators
+    assert get("/api/mmf?creator=castle%20works")["total"] == 1
+    app.reload()
+    app.click("#creators li[data-c='Castle_Works!']")  # only on MyMiniFactory: opens its items there
+    app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
+    assert app.locator("#grid .card.mmf").count() == 1
+    app.click("#creators li[data-c='Mini Forge']")  # the MyMiniFactory view stays, now by Mini Forge
+    app.wait_for_selector("#grid .card.mmf[data-mmf='5']")
+    assert app.locator("#grid .card.mmf").count() == 2
+    if SHOTS:
+        app.screenshot(path=f"{SHOTS}/mmf-creator.png")
+    app.click("#releases li[data-r='']")  # back to the local library, still by Mini Forge
+    app.wait_for_selector("#mmfStrip:not(.hidden) .mmf-chip")
+    assert app.locator("#mmfStrip .mmf-chip").count() == 2
+    if SHOTS:
+        app.screenshot(path=f"{SHOTS}/mmf-creator-local.png")
+    app.click("#creators li[data-all]")
+
     # Search shows MyMiniFactory matches above the local results.
     app.reload()
     app.fill("#search", "goblin")
@@ -136,7 +166,11 @@ with sync_playwright() as p:
     # MyMiniFactory items open in the model window with all their pictures.
     app.click("#grid .card.mmf[data-mmf='2']")
     app.wait_for_selector("#modelDlg.mmf-mode[open]")
-    assert app.locator("#mFiles [data-mmf-pic]").count() == 3
+    wyrm_images = get("/api/mmf/2")["images"]
+    assert [u.rsplit("/", 1)[1] for u in wyrm_images] == [
+        "720X720-wyrm-a.png", "720X720-wyrm-b.png", "720X720-wyrm-c.png", "720X720-wyrm-d.png"], wyrm_images
+    assert get("/api/mmf/1")["images"] == [f"{CDN}/1.png"], "pages without images keep the library picture"
+    assert app.locator("#mFiles [data-mmf-pic]").count() == 4
     assert app.locator("#mEditBtn").is_hidden() and app.locator("#mMapBtn").is_hidden()
     app.wait_for_function("document.getElementById('mPreview').naturalWidth > 0")
     if SHOTS:

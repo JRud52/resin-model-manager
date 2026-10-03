@@ -20,7 +20,10 @@
   window.addEventListener("message", function (e) {
     if (e.origin !== APP || !e.data) return;
     if (e.data.type === "mmf-ready") { ready = true; queue.splice(0).forEach(send); }
-    if (e.data.type === "mmf-queue") { finished = true; download(e.data.queue || []); }
+    if (e.data.type === "mmf-queue") {
+      finished = true;
+      galleries(e.data.gallery || []).then(function () { download(e.data.queue || []); });
+    }
     if (e.data.type === "mmf-done") { finished = true; box.textContent = e.data.text; setTimeout(function () { box.remove(); }, 8000); }
   });
   var box = document.createElement("div");
@@ -89,6 +92,72 @@
     };
   }
 
+  // A tribe group's objects: inline in the tribes list when the site includes them,
+  // else from a link the group carries, else /data-library/group/{id}.
+  async function groupObjects(g, label) {
+    var inline = list(g.items || (g.objects && (g.objects.items || g.objects)));
+    if (inline.length && inline.length >= (Number(g.total_count) || inline.length)) return inline;
+    var links = [];
+    list(g.apis).concat([g.url, g.objects_url, g.api_url, g.data_url]).forEach(function (u) {
+      u = u && (u.url || u);
+      if (typeof u === "string" && /^(\/|https:\/\/www\.myminifactory\.com\/)/.test(u) && !/^\/?$/.test(u)) links.push(u);
+    });
+    links.push("/data-library/group/" + encodeURIComponent(g.id));
+    var last;
+    for (var u of links) {
+      try { return await pages(u, label); } catch (err) { last = err; }
+    }
+    if (inline.length) return inline;
+    throw last;
+  }
+  // The keys and short values of a group, to see what the site sends when a group can't be read.
+  function sample(g) {
+    var out = {};
+    Object.keys(g || {}).forEach(function (k) {
+      var v = g[k];
+      out[k] = v && typeof v === "object" ? (Array.isArray(v) ? "[" + v.length + "]" : "{" + Object.keys(v).slice(0, 6).join(",") + "}") : v;
+    });
+    return out;
+  }
+  // The library lists only a small picture per item; its own page has every image in full size.
+  // Image links look like https://dl.myminifactory.com/object-assets/<folder>/images/720X720-name.jpg,
+  // with the size prefix left out for the original. Images of other items on the page live in other folders.
+  function folderOf(u) { var m = /\/object-assets\/([^\/]+)\//.exec(u || ""); return m && m[1]; }
+  function sizeOf(u) { var m = /\/images\/(\d+)X\d+-/i.exec(u); return m ? Number(m[1]) : 1e9; }
+  async function pageImages(it) {
+    if (!/^https:\/\/www\.myminifactory\.com\//.test(it.url)) return [];
+    var r = await fetch(it.url, { credentials: "include" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    var html = (await r.text()).replace(/\\\//g, "/").replace(/&amp;/g, "&");
+    var found = html.match(/https:\/\/[^"'\s<>()\\]+\/object-assets\/[^"'\s<>()\\]+?\/images\/[^"'\s<>()\\?#]+?\.(?:jpe?g|png|webp|gif)/gi) || [];
+    var og = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i.exec(html) ||
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i.exec(html);
+    var folder = [folderOf(it.image), folderOf(og && og[1]), folderOf(found[0])].filter(function (f) {
+      return f && found.some(function (u) { return folderOf(u) === f; });
+    })[0];
+    var best = {}, order = [];
+    found.filter(function (u) { return folderOf(u) === folder; }).forEach(function (u) {
+      var key = u.replace(/^https:\/\/[^\/]+/, "").replace(/\/images\/\d+X\d+-/i, "/images/");
+      if (!(key in best)) { order.push(key); best[key] = u; return; }
+      var a = sizeOf(best[key]), b = sizeOf(u);  // closest to 720 from above, else the largest
+      if ((b >= 720 && (a < 720 || b < a)) || (a < 720 && b > a)) best[key] = u;
+    });
+    return order.map(function (k) { return best[k]; });
+  }
+  async function galleries(items) {
+    var next = 0, done = 0, batch = [];
+    async function worker() {
+      while (next < items.length) {
+        var it = items[next++];
+        try { batch.push({ id: it.id, images: await pageImages(it) }); } catch (err) { /* read again next sync */ }
+        done++;
+        if (batch.length >= 20) send({ type: "mmf-gallery", items: batch.splice(0) });
+        say("Reading full-size images… " + done + " of " + items.length);
+      }
+    }
+    await Promise.all([worker(), worker(), worker()]);
+    if (batch.length) send({ type: "mmf-gallery", items: batch });
+  }
   function fileName(r, url, given, fallback) {
     var cd = r.headers.get("Content-Disposition") || "";
     var m = /filename\*=UTF-8''([^;]+)/i.exec(cd) || /filename="?([^";]+)"?/i.exec(cd);
@@ -135,16 +204,22 @@
       (await pages("/data-library/campaigns", "pledges")).forEach(function (o) { items.push(slim(o, "pledge")); });
     });
     await section("tribe", "tribes", async function () {
-      var tribes = await pages("/data-library/tribes", "tribes");
+      var tribes = await pages("/data-library/tribes", "tribes"), failed = [];
       for (var t of tribes) {
         var groups = list(t.groups && (t.groups.items || t.groups));
         var own = groups.filter(function (g) { return !/^all\//.test(String(g.id)); });
         for (var g of (own.length ? own : groups)) {
-          var objs = await pages("/data-library/group/" + g.id, (t.name || "tribe") + " · " + (g.name || ""));
           var name = [t.name, own.length > 1 ? g.name : ""].filter(Boolean).join(" · ");
-          objs.forEach(function (o) { items.push(slim(o, "tribe", name)); });
+          try {
+            (await groupObjects(g, (t.name || "tribe") + " · " + (g.name || ""))).forEach(function (o) { items.push(slim(o, "tribe", name)); });
+          } catch (err) {
+            failed.push(err.message + " " + JSON.stringify(sample(g)).slice(0, 300));
+          }
         }
       }
+      // Items from the groups that worked are kept; the section counts as incomplete so
+      // tribe items found by earlier syncs aren't dropped.
+      if (failed.length) throw new Error(failed.length + " tribe group(s) failed: " + failed.slice(0, 3).join(" | "));
     });
     var payload = { type: "mmf-library", items: items, complete: complete, problems: problems };
     if (!complete.length) {
