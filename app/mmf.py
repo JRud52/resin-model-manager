@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 
 from . import classify, db
 
@@ -130,41 +131,57 @@ def _tokens(name: str) -> set[str]:
     return out
 
 
+# Words that only say what kind of shop it is: "Bestiarum Miniatures" is "Bestiarum".
+_SHOP_WORDS = {"miniatures", "miniature", "minis", "studio", "studios", "official", "the"}
+
+
+def creator_key(name: str) -> str:
+    """Comparison key for creator names, so 'CobraMode', 'Cobra Mode' and 'cobra_mode!' are one creator:
+    accents and special characters ignored, CamelCase split into words, shop words left out."""
+    s = unicodedata.normalize("NFKD", str(name or ""))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", s)
+    words = re.findall(r"[a-z0-9]+", s.lower())
+    return "".join(w for w in words if w not in _SHOP_WORDS) or "".join(words)
+
+
 class _Index:
     """Local releases and models by word, to match MyMiniFactory titles against."""
 
     def __init__(self):
-        self.entries = []  # (tokens, creator tokens, release, model_id or None)
+        self.entries = []  # (tokens, creator tokens, creator key, release, model_id or None)
         self.by_word: dict[str, list[int]] = {}
         seen_releases = set()
         for r in db.conn().execute("SELECT release, model, MAX(creator) creator, MIN(model_id) model_id "
                                    "FROM files WHERE hidden=0 GROUP BY release, model"):
-            creator = _tokens(r["creator"] or "")
+            creator, ckey = _tokens(r["creator"] or ""), creator_key(r["creator"] or "")
             if r["release"] not in seen_releases:
                 seen_releases.add(r["release"])
-                self._add(_tokens(r["release"]) - creator or _tokens(r["release"]), creator, r["release"], None)
-            self._add(_tokens(r["model"]) - creator or _tokens(r["model"]), creator, r["release"], r["model_id"])
+                self._add(_tokens(r["release"]) - creator or _tokens(r["release"]), creator, ckey, r["release"], None)
+            self._add(_tokens(r["model"]) - creator or _tokens(r["model"]), creator, ckey, r["release"], r["model_id"])
 
-    def _add(self, toks, creator, release, model_id):
+    def _add(self, toks, creator, ckey, release, model_id):
         if not toks:
             return
         i = len(self.entries)
-        self.entries.append((toks, creator, release, model_id))
+        self.entries.append((toks, creator, ckey, release, model_id))
         for w in toks:
             self.by_word.setdefault(w, []).append(i)
 
     def match(self, name: str, creator: str = ""):
-        ctoks = _tokens(creator)
+        ctoks, ckey = _tokens(creator), creator_key(creator)
         toks = _tokens(name)
         toks = toks - ctoks or toks
         if not toks:
             return None
         best, best_score = None, 0.0
         for i in {i for w in toks for i in self.by_word.get(w, ())}:
-            etoks, ecreator, release, model_id = self.entries[i]
+            etoks, ecreator, ekey, release, model_id = self.entries[i]
             common = len(toks & etoks)
             jaccard = common / len(toks | etoks)
-            same_creator = bool(ctoks) and (ctoks <= ecreator or ecreator <= ctoks) and bool(ecreator)
+            same_creator = bool(ckey) and (ckey == ekey or (bool(ctoks) and bool(ecreator)
+                                                         and (ctoks <= ecreator or ecreator <= ctoks)))
             contained = common == min(len(toks), len(etoks))
             if not same_creator and all(w.isdigit() for w in toks & etoks):
                 continue  # "September 2023" alone says nothing without the creator
@@ -196,15 +213,25 @@ def _match(name: str, creator: str, index: _Index):
     return index.match(name, creator)
 
 
-def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200) -> dict:
-    c = db.conn()
+def _search(q: str) -> tuple[str, list]:
     where, args = [], []
     for word in q.split():
         where.append("(i.name LIKE ? OR i.creator LIKE ? OR i.id IN "
                      "(SELECT item_id FROM mmf_links WHERE collection LIKE ?))")
         args += [f"%{word}%"] * 3
-    rows = c.execute(f"""SELECT i.* FROM mmf_items i {"WHERE " + " AND ".join(where) if where else ""}
+    return ("WHERE " + " AND ".join(where) if where else ""), args
+
+
+def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
+          creator: str | None = None) -> dict:
+    """creator: only items by this creator (compared with creator_key; '' = items without one)."""
+    c = db.conn()
+    where, args = _search(q)
+    rows = c.execute(f"""SELECT i.* FROM mmf_items i {where}
                          ORDER BY i.creator COLLATE NOCASE, i.name COLLATE NOCASE""", args).fetchall()
+    if creator is not None:
+        key = creator_key(creator)
+        rows = [r for r in rows if creator_key(r["creator"]) == key]
     link_map: dict[int, list] = {}
     for r in c.execute("SELECT * FROM mmf_links ORDER BY source, collection"):
         link_map.setdefault(r["item_id"], []).append({"source": r["source"], "collection": r["collection"]})
@@ -227,6 +254,16 @@ def _item(r) -> dict:
     d["downloads"] = len(json.loads(d.get("downloads") or "[]"))
     d["queued"] = bool(d.get("queued"))
     return d
+
+
+def creators(q: str = "") -> dict[str, dict]:
+    """creator_key -> {"creator": the most used spelling, "items": count} of the synced items."""
+    where, args = _search(q)
+    spellings: dict[str, dict[str, int]] = {}
+    for r in db.conn().execute(f"SELECT i.creator FROM mmf_items i {where}", args):
+        names = spellings.setdefault(creator_key(r["creator"]), {})
+        names[r["creator"]] = names.get(r["creator"], 0) + 1
+    return {k: {"creator": max(v, key=v.get), "items": sum(v.values())} for k, v in spellings.items()}
 
 
 def item(oid: int) -> dict | None:

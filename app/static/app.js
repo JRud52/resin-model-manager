@@ -55,12 +55,18 @@ async function loadCreators() {
   const named = list.filter((c) => c.creator);
   const none = list.find((c) => !c.creator);
   $("#creatorOptions").innerHTML = named.map((c) => `<option value="${esc(c.creator)}">`).join("");
-  const li = (value, label, n, cls = "") => `<li data-c="${esc(value)}" class="${cls} ${state.creator === value ? "active" : ""}" title="${esc(label)}">
-      <span class="name">${esc(label)}</span><span class="muted">${n}</span></li>`;
+  // Creators only on MyMiniFactory are listed too; picking one shows their MyMiniFactory items.
+  const li = (c, label, cls = "") => {
+    const n = c.releases || c.mmf;
+    const tip = [label, c.releases && `${c.releases} release${c.releases === 1 ? "" : "s"}`,
+      c.mmf && `${c.mmf} MyMiniFactory item${c.mmf === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+    return `<li data-c="${esc(c.creator)}" data-local="${c.releases ? 1 : ""}" class="${cls} ${state.creator === c.creator ? "active" : ""}" title="${esc(tip)}">
+      <span class="name">${esc(label)}${c.releases ? "" : `<span class="by">only on MyMiniFactory</span>`}</span><span class="muted">${n}</span></li>`;
+  };
   // "No creator" sits at the top so releases still missing one are easy to work through.
-  $("#creators").innerHTML = (list.length ? `<li data-all class="${state.creator === null && state.source !== "mmf" ? "active" : ""}"><span class="name">All creators</span></li>` : "") +
-    (none ? li("", "No creator", none.releases, "muted") : "") +
-    named.map((c) => li(c.creator, c.creator, c.releases)).join("") +
+  $("#creators").innerHTML = (list.length ? `<li data-all class="${state.creator === null ? "active" : ""}"><span class="name">All creators</span></li>` : "") +
+    (none ? li(none, "No creator", "muted") : "") +
+    named.map((c) => li(c, c.creator)).join("") +
     (named.length ? "" : `<li class="muted small" style="cursor:default">Set a creator from a release, or when importing.</li>`);
 }
 
@@ -68,7 +74,8 @@ $("#creators").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-c], li[data-all]"); if (!li) return;
   state.creator = li.hasAttribute("data-all") ? null : li.dataset.c;
   state.release = null;
-  state.source = null;
+  // The MyMiniFactory view stays on and filters by creator; a creator with nothing local opens it.
+  if (state.source !== "mmf" && state.creator !== null && !li.dataset.local) Object.assign(state, { source: "mmf", mmfMissing: false });
   $("#sidebar").classList.remove("open");
   refresh();
 });
@@ -308,7 +315,7 @@ $("#mmfList").addEventListener("click", (e) => {
   showMmf(!!li.dataset.mmfMissing);
 });
 function showMmf(missing) {
-  Object.assign(state, { source: "mmf", mmfMissing: missing, release: null, creator: null, tags: [] });
+  Object.assign(state, { source: "mmf", mmfMissing: missing, release: null, tags: [] });
   $("#sidebar").classList.remove("open");
   refresh();
 }
@@ -331,13 +338,15 @@ function mmfCard(m) {
 async function loadMmf(append) {
   const p = new URLSearchParams({ q: state.q, offset: state.offset, limit: PAGE });
   if (state.mmfMissing) p.set("missing", "true");
+  if (state.creator !== null) p.set("creator", state.creator);
   const res = await api(`/api/mmf?${p}`);
   if (state.source !== "mmf") return;
   state.total = res.total;
   state.items = append ? state.items.concat(res.items) : res.items;
   $("#grid").innerHTML = state.items.map(mmfCard).join("");
   $("#more").classList.toggle("hidden", state.items.length >= state.total);
-  $("#crumbs").textContent = `MyMiniFactory / ${state.mmfMissing ? "Not in your library" : "All items"} · ${state.total} items`;
+  const who = state.creator === null ? "" : `${state.creator || "No creator"} / `;
+  $("#crumbs").textContent = `MyMiniFactory / ${who}${state.mmfMissing ? "Not in your library" : "All items"} · ${state.total} items`;
   if (state.picked) endPicking();
   for (const id of ["#releaseCreatorBtn", "#releaseTagBtn", "#releaseImages", "#mmfStrip", "#combineBtn"]) $(id).classList.add("hidden");
   $("#activeTags").innerHTML = "";
@@ -346,14 +355,17 @@ async function loadMmf(append) {
   empty.classList.toggle("hidden", !!state.total);
 }
 
-// Local results come first; matching MyMiniFactory items are summed up above them.
+// Local results come first; matching MyMiniFactory items (by the search, or by the picked
+// creator) are summed up above them.
 async function loadMmfStrip() {
   const el = $("#mmfStrip");
-  const q = state.q;
-  if (!q || !state.mmf?.total) { el.classList.add("hidden"); return; }
-  const res = await api(`/api/mmf?${new URLSearchParams({ q, limit: 8 })}`);
-  if (q !== state.q || state.source === "mmf") return;
-  el.innerHTML = `<div class="side-title">On MyMiniFactory · ${res.total} match${res.total === 1 ? "" : "es"}
+  const q = state.q, creator = state.creator;
+  if ((!q && !creator) || !state.mmf?.total) { el.classList.add("hidden"); return; }
+  const p = new URLSearchParams({ q, limit: 8 });
+  if (creator) p.set("creator", creator);
+  const res = await api(`/api/mmf?${p}`);
+  if (q !== state.q || creator !== state.creator || state.source === "mmf") return;
+  el.innerHTML = `<div class="side-title">On MyMiniFactory · ${res.total} ${q ? `match${res.total === 1 ? "" : "es"}` : `item${res.total === 1 ? "" : "s"}`}
       <button class="link" id="mmfStripAll">Show all</button></div>
     <div class="strip">${res.items.map((m) => `<button class="mmf-chip" data-mmf-item="${m.id}" title="${esc(m.name)}${m.local ? " · in your library" : " · not downloaded"}">
       ${m.image ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(m.image)}" alt="" onerror="this.remove()">` : ""}
@@ -473,7 +485,7 @@ $("#mmfClear").onclick = async () => {
   renderMmfInfo();
 };
 // The sync window (mmf-sync.html) is a separate tab; pick up its result when coming back.
-window.addEventListener("focus", () => { if (!document.querySelector("dialog[open]:not(#mmfDlg)")) loadMmfSide().then(() => { if ($("#mmfDlg").open) renderMmfInfo(); }); });
+window.addEventListener("focus", () => { if (!document.querySelector("dialog[open]:not(#mmfDlg)")) { loadCreators(); loadMmfSide().then(() => { if ($("#mmfDlg").open) renderMmfInfo(); }); } });
 
 // ------------------------------------------------------------ tags
 

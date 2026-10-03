@@ -362,12 +362,23 @@ def release_tags(t: TagsIn):
 
 @app.get("/api/creators")
 def creators(q: str = "", tags: str = ""):
-    """Every creator with its release and model counts ('' = releases without one)."""
+    """Every creator with its release and model counts ('' = releases without one), and how many
+    synced MyMiniFactory items are by them (mmf). Creators only on MyMiniFactory are listed too,
+    with no releases; names are matched loosely ('CobraMode' == 'Cobra Mode')."""
     where, args = _filters(None, q, [t for t in tags.split(",") if t.strip()])
     rows = db.conn().execute(f"""SELECT MIN(creator) creator, COUNT(DISTINCT release) releases,
                                  COUNT(DISTINCT model_id) models FROM files WHERE {where}
                                  GROUP BY creator COLLATE NOCASE ORDER BY creator COLLATE NOCASE""", args).fetchall()
-    return [dict(r) for r in rows]
+    out = [{**dict(r), "mmf": 0} for r in rows]
+    if tags.strip():  # tags are only on local models
+        return out
+    online = mmf.creators(q)
+    for c in out:
+        hit = online.pop(mmf.creator_key(c["creator"]), None)
+        c["mmf"] = hit["items"] if hit else 0
+    out += [{"creator": v["creator"], "releases": 0, "models": 0, "mmf": v["items"]} for v in online.values()]
+    out.sort(key=lambda c: (c["creator"] != "", c["creator"].casefold()))
+    return out
 
 
 class CreatorIn(BaseModel):
@@ -576,9 +587,10 @@ def split_combine(combine_id: int):
 # ---------------------------------------------------------------- MyMiniFactory
 
 @app.get("/api/mmf")
-def mmf_items(q: str = "", missing: bool = False, offset: int = 0, limit: int = Query(200, le=1000)):
+def mmf_items(q: str = "", missing: bool = False, offset: int = 0, limit: int = Query(200, le=1000),
+              creator: Optional[str] = None):
     """The synced MyMiniFactory library; `local` is the matching local release or model."""
-    return mmf.items(q, missing, offset, limit)
+    return mmf.items(q, missing, offset, limit, creator)
 
 
 @app.get("/api/mmf/status")

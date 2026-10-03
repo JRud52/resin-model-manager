@@ -126,7 +126,10 @@ groups them by **release** and **model**, separates **supported** and
   size (the library list only has one small picture). Items whose name shares
   its words with a local release or model (by the same creator, or a close
   match by anyone) are marked *in your library*; *Not in your library* lists
-  the rest. Searching shows matching
+  the rest. MyMiniFactory creators are added to the Creators list, merged with
+  your own creators when the names only differ in spaces, capitals, special
+  characters or words like "Miniatures" ("CobraMode" is "Cobra Mode"); picking
+  one shows their MyMiniFactory items next to your releases. Searching shows matching
   MyMiniFactory items above the local results. If the bookmark can't reach the
   Resin Models window it saves `myminifactory-library.json` instead, which you
   upload in the same dialog. This relies on MyMiniFactory's website, not a
