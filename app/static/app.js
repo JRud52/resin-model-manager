@@ -18,7 +18,8 @@ const fmtSize = (b) => {
 
 // creator: null = all creators, "" = releases without a creator
 // source: null = local library, "mmf" = the synced MyMiniFactory library (mmfMissing: only items not in it)
-const state = { source: null, mmfMissing: false, release: null, creator: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null, releases: [] };
+// mmfRelease: a MyMiniFactory release not in the library, shown from the Releases list
+const state = { source: null, mmfMissing: false, mmfRelease: null, release: null, creator: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null, releases: [] };
 const PAGE = 120;
 
 // ------------------------------------------------------------ releases & grid
@@ -31,20 +32,28 @@ const filterParams = () => {
 
 async function loadReleases() {
   const rels = await api(`/api/releases?${filterParams()}`);
-  state.releases = rels;
+  // Releases only on MyMiniFactory (not downloaded yet) are listed among the local ones.
+  state.releases = rels.filter((r) => !r.mmf);
   const ul = $("#releases");
-  const total = rels.reduce((a, r) => a + r.models, 0);
+  const total = state.releases.reduce((a, r) => a + r.models, 0);
   const by = (r) => state.creator === null && r.creator ? `<span class="by">${esc(r.creator)}</span>` : "";
+  const li = (r) => {
+    const active = r.mmf ? state.source === "mmf" && state.mmfRelease === r.release : state.source !== "mmf" && state.release === r.release;
+    const tip = `${r.release}${r.creator ? ` by ${r.creator}` : ""}${r.mmf ? ` · on MyMiniFactory, not in your library (${r.mmf} item${r.mmf === 1 ? "" : "s"})` : ""}`;
+    return `<li data-r="${esc(r.release)}" data-mmf="${r.mmf ? 1 : ""}" class="${active ? "active" : ""}" title="${esc(tip)}">
+      <span class="name">${esc(r.release)}${r.mmf ? `<span class="mmf-tag">MMF</span>` : ""}${by(r)}</span><span class="muted">${r.mmf || r.models}</span></li>`;
+  };
   ul.innerHTML = `<li data-r="" class="${state.release === null && state.source !== "mmf" ? "active" : ""}"><span class="name">All releases</span><span class="muted">${total}</span></li>` +
-    rels.map((r) => `<li data-r="${esc(r.release)}" class="${state.release === r.release ? "active" : ""}" title="${esc(r.creator ? `${r.release} by ${r.creator}` : r.release)}">
-      <span class="name">${esc(r.release)}${by(r)}</span><span class="muted">${r.models}</span></li>`).join("");
-  $("#releaseList").innerHTML = rels.map((r) => `<option value="${esc(r.release)}">`).join("");
+    rels.map(li).join("");
+  $("#releaseList").innerHTML = state.releases.map((r) => `<option value="${esc(r.release)}">`).join("");
+  sectionNow();
+  trimList("releases");
 }
 
 $("#releases").addEventListener("click", (e) => {
-  const li = e.target.closest("li"); if (!li) return;
-  state.release = li.dataset.r === "" ? null : li.dataset.r;
-  state.source = null;
+  const li = e.target.closest("li[data-r]"); if (!li) return;
+  if (li.dataset.mmf) Object.assign(state, { source: "mmf", mmfMissing: false, mmfRelease: li.dataset.r, release: null, tags: [] });
+  else Object.assign(state, { source: null, mmfRelease: null, release: li.dataset.r === "" ? null : li.dataset.r });
   $("#sidebar").classList.remove("open");
   refresh();
 });
@@ -68,12 +77,14 @@ async function loadCreators() {
     (none ? li(none, "No creator", "muted") : "") +
     named.map((c) => li(c, c.creator)).join("") +
     (named.length ? "" : `<li class="muted small" style="cursor:default">Set a creator from a release, or when importing.</li>`);
+  trimList("creators");
 }
 
 $("#creators").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-c], li[data-all]"); if (!li) return;
   state.creator = li.hasAttribute("data-all") ? null : li.dataset.c;
   state.release = null;
+  state.mmfRelease = null;
   // The MyMiniFactory view stays on and filters by creator; a creator with nothing local opens it.
   if (state.source !== "mmf" && state.creator !== null && !li.dataset.local) Object.assign(state, { source: "mmf", mmfMissing: false });
   $("#sidebar").classList.remove("open");
@@ -305,7 +316,7 @@ const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe" };
 async function loadMmfSide() {
   const s = await api("/api/mmf/status");
   state.mmf = s;
-  const li = (missing, label, n) => `<li data-mmf-missing="${missing ? 1 : ""}" class="${state.source === "mmf" && state.mmfMissing === missing ? "active" : ""}">
+  const li = (missing, label, n) => `<li data-mmf-missing="${missing ? 1 : ""}" class="${state.source === "mmf" && state.mmfRelease === null && state.mmfMissing === missing ? "active" : ""}">
       <span class="name">${label}</span><span class="muted">${n}</span></li>`;
   $("#mmfList").innerHTML = s.total
     ? li(false, "All items", s.total) + li(true, "Not in your library", s.missing)
@@ -316,7 +327,7 @@ $("#mmfList").addEventListener("click", (e) => {
   showMmf(!!li.dataset.mmfMissing);
 });
 function showMmf(missing) {
-  Object.assign(state, { source: "mmf", mmfMissing: missing, release: null, tags: [] });
+  Object.assign(state, { source: "mmf", mmfMissing: missing, mmfRelease: null, release: null, tags: [] });
   $("#sidebar").classList.remove("open");
   refresh();
 }
@@ -340,6 +351,7 @@ async function loadMmf(append) {
   const p = new URLSearchParams({ q: state.q, offset: state.offset, limit: PAGE });
   if (state.mmfMissing) p.set("missing", "true");
   if (state.creator !== null) p.set("creator", state.creator);
+  if (state.mmfRelease !== null) p.set("release", state.mmfRelease);
   const res = await api(`/api/mmf?${p}`);
   if (state.source !== "mmf") return;
   state.total = res.total;
@@ -347,7 +359,8 @@ async function loadMmf(append) {
   $("#grid").innerHTML = state.items.map(mmfCard).join("");
   $("#more").classList.toggle("hidden", state.items.length >= state.total);
   const who = state.creator === null ? "" : `${state.creator || "No creator"} / `;
-  $("#crumbs").textContent = `MyMiniFactory / ${who}${state.mmfMissing ? "Not in your library" : "All items"} · ${state.total} items`;
+  const what = state.mmfRelease !== null ? `${state.mmfRelease} (not in your library)` : state.mmfMissing ? "Not in your library" : "All items";
+  $("#crumbs").textContent = `MyMiniFactory / ${who}${what} · ${state.total} items`;
   if (state.picked) endPicking();
   for (const id of ["#releaseCreatorBtn", "#releaseTagBtn", "#releaseImages", "#mmfStrip", "#combineBtn"]) $(id).classList.add("hidden");
   $("#renameCreatorBtn").classList.toggle("hidden", !state.creator);
@@ -497,6 +510,7 @@ async function loadTags() {
   $("#tagList").innerHTML = tags.length
     ? tags.map((t) => `<li class="badge tag ${state.tags.some((x) => x.toLowerCase() === t.tag.toLowerCase()) ? "on" : ""}" data-tag="${esc(t.tag)}">${esc(t.tag)} <span class="muted">${t.models}</span></li>`).join("")
     : `<li class="muted small" style="padding:0 8px">Add tags from a model's page.</li>`;
+  trimList("tagList");
 }
 
 function toggleTag(tag) {
@@ -636,6 +650,65 @@ $("#search").addEventListener("input", (e) => {
 });
 $("#supFilter").onchange = (e) => { state.sup = e.target.value; loadModels(); };
 $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
+
+// Sidebar sections fold away by clicking their title; which ones are folded is remembered in this
+// browser. A folded title still shows what is picked in it.
+(() => {
+  let folded = [];
+  try { folded = JSON.parse(localStorage.getItem("sideFolded") || "[]"); } catch {}
+  document.querySelectorAll(".side-title[data-sec]").forEach((t) => {
+    t.classList.toggle("collapsed", folded.includes(t.dataset.sec));
+    t.title = "Click to fold or unfold";
+    t.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      t.classList.toggle("collapsed");
+      const now = [...document.querySelectorAll(".side-title.collapsed")].map((x) => x.dataset.sec);
+      try { localStorage.setItem("sideFolded", JSON.stringify(now)); } catch {}
+    });
+  });
+})();
+// Long sidebar lists show their first SIDE_SHOWN entries, plus the "All …" rows and whatever is
+// picked, until "Show all" is clicked (remembered in this browser) or the filter box is used.
+const SIDE_SHOWN = 8;
+let sideAll = [];
+try { sideAll = JSON.parse(localStorage.getItem("sideAll") || "[]"); } catch {}
+function trimList(id) {
+  const ul = $(`#${id}`), input = $(`.side-filter input[data-for="${id}"]`);
+  ul.querySelector(".show-more")?.remove();
+  const rows = [...ul.querySelectorAll(":scope > li[data-c], :scope > li[data-r], :scope > li[data-tag]")]
+    .filter((li) => !li.hasAttribute("data-all") && li.dataset.r !== "" && li.dataset.c !== "");
+  input.closest(".side-filter").classList.toggle("hidden", rows.length <= SIDE_SHOWN && !input.value);
+  const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = words.length || sideAll.includes(id);
+  let shown = 0, hidden = 0;
+  for (const li of rows) {
+    const text = li.textContent.toLowerCase();
+    const match = words.every((w) => text.includes(w));
+    const keep = match && (all || shown < SIDE_SHOWN || li.matches(".active, .on"));
+    li.classList.toggle("cut", !keep);
+    if (keep) shown++; else if (match) hidden++;
+  }
+  if (hidden || (sideAll.includes(id) && rows.length > SIDE_SHOWN && !words.length)) {
+    const more = hidden ? `Show all ${rows.length}…` : "Show fewer";
+    ul.insertAdjacentHTML("beforeend", `<li class="show-more" data-more="${hidden ? 1 : ""}"><span class="name">${more}</span></li>`);
+  } else if (words.length && !shown) ul.insertAdjacentHTML("beforeend", `<li class="show-more muted" style="cursor:default"><span class="name">No matches</span></li>`);
+}
+document.querySelectorAll(".side-filter input").forEach((input) => input.addEventListener("input", () => trimList(input.dataset.for)));
+document.querySelectorAll("#creators, #releases, #tagList").forEach((ul) => ul.addEventListener("click", (e) => {
+  const more = e.target.closest(".show-more[data-more]"); if (!more) return;
+  e.stopImmediatePropagation();
+  sideAll = more.dataset.more ? [...new Set([...sideAll, ul.id])] : sideAll.filter((x) => x !== ul.id);
+  try { localStorage.setItem("sideAll", JSON.stringify(sideAll)); } catch {}
+  trimList(ul.id);
+}, true));
+
+function sectionNow() {
+  const set = (sec, text) => { const el = $(`.side-title[data-sec="${sec}"] .sec-now`); if (el) el.textContent = text ? `· ${text}` : ""; };
+  set("creators", state.creator === null ? "" : state.creator || "No creator");
+  set("releases", state.source === "mmf" ? state.mmfRelease || "" : state.release || "");
+  set("mmf", state.source === "mmf" && state.mmfRelease === null ? (state.mmfMissing ? "Not in your library" : "All items") : "");
+  set("tags", state.tags.join(", "));
+}
 
 // Sidebar width: drag the handle on its right edge; remembered in this browser only.
 (() => {

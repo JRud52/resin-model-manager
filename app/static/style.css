@@ -39,9 +39,23 @@ body.resizing { cursor: col-resize; user-select: none; }
 #releases li.active, #creators li.active { background: var(--accent); color: #08131d; }
 #releases li.active .muted, #creators li.active .muted { color: #08131d; }
 #releases .name, #creators .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#releases .by { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-#releases li.active .by { color: #08131d; }
-.side-title .link { all: unset; cursor: pointer; float: right; text-transform: none; letter-spacing: 0; color: var(--accent); }
+#releases .by, #creators .by { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+#releases li.active .by, #creators li.active .by { color: #08131d; }
+.side-title[data-sec] { cursor: pointer; user-select: none; display: flex; align-items: baseline; gap: 6px; }
+.side-title[data-sec]::before { content: "▾"; width: 10px; transition: transform .15s; }
+.side-title[data-sec]:hover .sec-name { color: var(--text); }
+.side-title .sec-now { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; color: var(--accent); }
+.side-title.collapsed::before { transform: rotate(-90deg); }
+.side-title.collapsed + ul, .side-title.collapsed + .side-filter, .side-title.collapsed + .side-filter + ul { display: none; }
+/* Long lists show their first entries (plus what's picked) until "Show all" or a filter. */
+.side-filter { padding: 0 12px 6px; }
+.side-filter input { width: 100%; box-sizing: border-box; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); color: var(--text); font-size: 13px; }
+#sidebar li.cut { display: none; }
+#sidebar li.show-more { color: var(--accent); font-size: 13px; }
+#tagList li.show-more { background: none; border: 0; padding: 2px 4px; cursor: pointer; }
+#releases .mmf-tag { font-size: 10px; padding: 0 5px; margin-left: 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); vertical-align: 1px; }
+#releases li.active .mmf-tag { color: #08131d; border-color: #08131d; }
+.side-title .link { all: unset; cursor: pointer; margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent); }
 .side-title .link:hover { text-decoration: underline; }
 #creatorDlg { max-width: min(560px, 96vw); }
 #renameCreatorDlg { max-width: min(440px, 96vw); }

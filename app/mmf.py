@@ -249,9 +249,13 @@ def _search(q: str) -> tuple[str, list]:
     return ("WHERE " + " AND ".join(where) if where else ""), args
 
 
-def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
-          creator: str | None = None) -> dict:
-    """creator: only items by this creator (compared with creator_key; '' = items without one)."""
+def _release_of(d: dict) -> str:
+    """The release an item belongs to on MyMiniFactory: its tribe month or pledge, else the item itself."""
+    return next((s["collection"] for s in d["sources"] if s["collection"]), "") or d["name"]
+
+
+def _matched_items(q: str = "", creator: str | None = None) -> list[dict]:
+    """Items with their sources, their matching local release or model (local) and their release."""
     c = db.conn()
     where, args = _search(q)
     rows = c.execute(f"""SELECT i.* FROM mmf_items i {where}
@@ -269,10 +273,36 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
         d = _item(r, names)
         d["sources"] = link_map.get(r["id"], [])
         d["local"] = _match(r["name"], d["creator"], index)
-        if missing and d["local"]:
-            continue
+        d["release"] = _release_of(d)
         out.append(d)
+    return out
+
+
+def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
+          creator: str | None = None, release: str | None = None) -> dict:
+    """creator: only items by this creator (compared with creator_key; '' = items without one).
+    release: only items of this MyMiniFactory release that aren't in the local library."""
+    out = _matched_items(q, creator)
+    if missing or release is not None:
+        out = [d for d in out if not d["local"]]
+    if release is not None:
+        out = [d for d in out if d["release"].casefold() == release.casefold()]
     return {"total": len(out), "items": out[offset:offset + limit]}
+
+
+def releases(q: str = "", creator: str | None = None, local: set[str] = frozenset()) -> list[dict]:
+    """Releases of the items not in the local library, for the sidebar. Items already in the library
+    show under their local release; `local` (casefolded local release names) drops repeats."""
+    groups: dict[str, dict] = {}
+    for d in _matched_items(q, creator):
+        if d["local"] or d["release"].casefold() in local:
+            continue
+        g = groups.setdefault(d["release"].casefold(), {"release": d["release"], "creators": {}, "mmf": 0})
+        g["mmf"] += 1
+        if d["creator"]:
+            g["creators"][d["creator"]] = g["creators"].get(d["creator"], 0) + 1
+    return [{"release": g["release"], "creator": max(g["creators"], key=g["creators"].get) if g["creators"] else None,
+             "models": 0, "mmf": g["mmf"]} for g in groups.values()]
 
 
 def _item(r, names: dict[str, str] | None = None) -> dict:

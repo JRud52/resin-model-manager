@@ -31,13 +31,16 @@
 </header>
 <div id="layout">
   <aside id="sidebar">
-    <div class="side-title">Creators <button id="editCreatorsBtn" class="link" title="Set the creator of several releases">Edit</button></div>
+    <div class="side-title" data-sec="creators"><span class="sec-name">Creators</span><span class="sec-now"></span> <button id="editCreatorsBtn" class="link" title="Set the creator of several releases">Edit</button></div>
+    <div class="side-filter hidden"><input type="search" data-for="creators" placeholder="Filter creators…" autocomplete="off"></div>
     <ul id="creators"></ul>
-    <div class="side-title">MyMiniFactory <button id="mmfSyncBtn" class="link" title="Bring in your MyMiniFactory library">Sync</button></div>
+    <div class="side-title" data-sec="mmf"><span class="sec-name">MyMiniFactory</span><span class="sec-now"></span> <button id="mmfSyncBtn" class="link" title="Bring in your MyMiniFactory library">Sync</button></div>
     <ul id="mmfList"></ul>
-    <div class="side-title">Releases</div>
+    <div class="side-title" data-sec="releases"><span class="sec-name">Releases</span><span class="sec-now"></span></div>
+    <div class="side-filter hidden"><input type="search" data-for="releases" placeholder="Filter releases…" autocomplete="off"></div>
     <ul id="releases"></ul>
-    <div class="side-title">Tags</div>
+    <div class="side-title" data-sec="tags"><span class="sec-name">Tags</span><span class="sec-now"></span></div>
+    <div class="side-filter hidden"><input type="search" data-for="tagList" placeholder="Filter tags…" autocomplete="off"></div>
     <ul id="tagList"></ul>
   </aside>
   <div id="sideResize" title="Drag to resize, double-click to reset"></div>
