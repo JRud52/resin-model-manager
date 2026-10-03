@@ -395,4 +395,34 @@ for _ in range(120):
         break
     time.sleep(1)
 print("preview states:", pv)
+
+# Renaming a creator together with its library folder keeps tags, corrections and previews.
+LIB = Path(get("/api/status")["library_dir"])
+assert get("/api/creators/folders?creator=Tank%20Works")["folders"] == ["Tank Works"]
+mech = {m["model"]: m for m in get("/api/models?creator=Tank%20Works")["items"]}
+post(f"/api/models/{mech['Walker']['id']}/tags", {"add": ["mechs"]})
+post("/api/overrides", {"prefixes": ["Tank Works/Mech Pack/Strider"], "model": "Strider Mk2", "release": "Mech Pack"})
+before = {m["model"]: m for m in get("/api/models?creator=Tank%20Works")["items"]}
+try:
+    post("/api/creators/rename", {"creator": "Tank Works", "name": "Space Rats", "folders": True})
+    raise SystemExit("renamed onto an existing folder")
+except urllib.error.HTTPError as e:
+    assert e.code == 409, e.code
+r = post("/api/creators/rename", {"creator": "Tank Works", "name": "Tank Workshop", "folders": True})
+assert r["folders"] == ["Tank Workshop"], r
+assert (LIB / "Tank Workshop" / "Mech Pack.zip").is_file() and not (LIB / "Tank Works").exists()
+after = {m["model"]: m for m in get("/api/models?creator=Tank%20Workshop")["items"]}
+assert after.keys() == before.keys() and "Strider Mk2" in after, after.keys()
+assert after["Walker"]["id"] == before["Walker"]["id"] and after["Walker"]["tags"] == ["mechs"]
+assert any(o["prefix"] == "Tank Workshop/Mech Pack/Strider" for o in get("/api/overrides"))
+assert not get("/api/creators/folders?creator=Tank%20Works")["folders"]
+cover = after["Walker"]["cover"]
+assert get(f"/api/models/{after['Walker']['id']}")["files"][0]["preview"] == "ok"
+assert urllib.request.urlopen(f"{BASE}/api/files/{cover}/preview").status == 200
+post("/api/index")  # a full re-index finds the same thing
+time.sleep(0.5)
+wait_job()
+again = {m["model"]: m for m in get("/api/models?creator=Tank%20Workshop")["items"]}
+assert again.keys() == after.keys() and again["Walker"]["tags"] == ["mechs"], again.keys()
+print("creator folder rename ok")
 print("ALL OK")

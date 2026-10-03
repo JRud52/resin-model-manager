@@ -50,6 +50,7 @@
       <div id="activeTags" class="badges"></div>
       <div class="spacer"></div>
       <button id="combineBtn" class="hidden" title="Pick several models to edit together or combine into one">Select models</button>
+      <button id="renameCreatorBtn" class="hidden" title="Change how this creator's name is shown">Rename creator</button>
       <button id="releaseCreatorBtn" class="hidden">Set creator</button>
       <button id="releaseTagBtn" class="hidden">Tag all models in this release</button>
     </div>
@@ -328,6 +329,21 @@
     <p class="muted small" id="creatorCount"></p>
     <div class="row">
       <button value="save" class="primary">Save</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="renameCreatorDlg">
+  <form method="dialog" class="card-form">
+    <h3>Rename creator</h3>
+    <label><span>New name for <b id="rcOld"></b></span><input name="name" autocomplete="off" required></label>
+    <p class="muted small">Applies to all of this creator's releases and MyMiniFactory items, and is kept when the library is re-indexed or synced.</p>
+    <label class="check hidden" id="rcFolderRow"><input type="checkbox" name="folders"> <span>Also rename the folder in the library: <span id="rcFolders" class="muted"></span></span></label>
+    <p class="muted small hidden" id="rcFolderNote">Tags, corrections and previews move with it. Only the library copy is renamed, never your NAS folder; copying from the NAS folder again files things under the new name.</p>
+    <div class="row">
+      <button value="save" class="primary">Save</button>
+      <button value="reset" formnovalidate id="rcReset">Undo renames</button>
       <button value="cancel" formnovalidate>Cancel</button>
     </div>
   </form>
