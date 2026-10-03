@@ -87,7 +87,10 @@ groups them by **release** and **model**, separates **supported** and
   If a creator's name shows up oddly (a folder or account name like
   `the-printing-goes-ever-on`), click the creator and use *Rename creator*: the
   new name is used for their releases and MyMiniFactory items, and kept across
-  re-indexing and syncs. *Undo renames* goes back to the original name.
+  re-indexing and syncs. *Undo renames* goes back to the original name. When
+  the name comes from a folder, the dialog can rename that folder in the
+  library too; tags, corrections and previews move with it. Only the library
+  copy is renamed, and copying from the NAS folder again uses the new name.
 * **Previews.** STLs are rendered by a built-in CPU renderer (numpy, no GPU or
   OpenGL needed) and cached as WebP images in `data/previews`. Files inside
   archives are rendered straight from the archive without extracting them into

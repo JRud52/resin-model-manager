@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS creator_names (
     name TEXT NOT NULL
 );
 
+-- Library folders renamed from the app (old path -> new path, relative to the
+-- library). Copying from the NAS folder again puts files under the new name.
+CREATE TABLE IF NOT EXISTS folder_moves (
+    old TEXT PRIMARY KEY,
+    new TEXT NOT NULL
+);
+
 -- Picture chosen in the app as the main picture of a release (key = release
 -- name) or of a model (key = model_id). Stored by the picture's logical path so
 -- it survives re-indexing; if the picture disappears the automatic pick is used.

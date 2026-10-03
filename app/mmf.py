@@ -326,10 +326,10 @@ def _folder_name(s: str) -> str:
 def queue() -> list[dict]:
     """Items to download on the next bookmarklet run, with the library folder each goes to:
     Creator/Item (read as Creator / Release) or just Item when the creator is unknown."""
-    out = []
+    out, names = [], creator_names()
     for r in db.conn().execute("SELECT * FROM mmf_items WHERE queued=1 ORDER BY name COLLATE NOCASE"):
         name = _folder_name(r["name"])
-        creator = _folder_name(r["creator"]) if r["creator"] else ""
+        creator = _folder_name(display_creator(r["creator"], names)) if r["creator"] else ""
         out.append({"id": r["id"], "name": r["name"], "url": r["url"],
                      "downloads": json.loads(r["downloads"] or "[]"),
                      "folder": f"{creator}/{name}" if creator else name, "depth": 1 if creator else 0})

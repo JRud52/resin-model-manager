@@ -112,6 +112,102 @@ def _top_key(rel: str) -> str | None:
     return p.stem if p.suffix.lower() in config.ARCHIVE_EXTS else None
 
 
+def folder_moves() -> list[tuple[str, str]]:
+    """(old, new) folder renames, deepest first."""
+    rows = db.conn().execute("SELECT old, new FROM folder_moves").fetchall()
+    return sorted(((r["old"], r["new"]) for r in rows), key=lambda m: -len(m[0]))
+
+
+def moved_path(rel: str, moves: list[tuple[str, str]]) -> str:
+    """Where a path from the NAS folder lives in the library after folders were renamed."""
+    for old, new in moves:
+        if _under(rel, old):
+            return new + rel[len(old):]
+    return rel
+
+
+def creator_folders(shown: str) -> list[str]:
+    """Library folders (relative paths) whose name gives creator `shown`: a folder above
+    one of its files whose name is that creator, or a spelling of it that was renamed."""
+    names = mmf.creator_names()
+    keys = {mmf.creator_key(shown)} | {k for k, v in names.items() if v.casefold() == shown.casefold()}
+    keys.discard("")
+    out = set()
+    for r in db.conn().execute("SELECT DISTINCT rel_path FROM files WHERE creator = ? COLLATE NOCASE", (shown,)):
+        parts = PurePosixPath(r["rel_path"]).parts[:-1]
+        for i, part in enumerate(parts):
+            if mmf.creator_key(part) in keys:
+                out.add("/".join(parts[:i + 1]))
+                break
+    return sorted(p for p in out if (config.LIBRARY_DIR / p).is_dir())
+
+
+_UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+
+
+def safe_folder_name(name: str) -> str:
+    return _UNSAFE_NAME.sub("-", " ".join(name.split())).strip(" .-")[:120]
+
+
+def rename_folder(old: str, new_name: str) -> str:
+    """Rename library folder `old` (relative path) to `new_name` in the same place, and
+    move everything the app keeps by path along with it: indexed files and pictures,
+    corrections, folder mappings and layouts, chosen main pictures and cached previews.
+    Only the library copy is touched, never the NAS folder. Returns the new path."""
+    lib = config.LIBRARY_DIR.resolve()
+    name = safe_folder_name(new_name)
+    if not name:
+        raise ValueError("The new folder name is empty")
+    src = (lib / old).resolve()
+    if not src.is_relative_to(lib) or src == lib or not src.is_dir():
+        raise ValueError(f"{old} is not a folder in the library")
+    new = "/".join([*PurePosixPath(old).parts[:-1], name])
+    dst = lib / new
+    if new == old:
+        return new
+    if dst.exists() and not (new.casefold() == old.casefold() and dst.samefile(src)):
+        raise ValueError(f"A folder called {new} is already in the library")
+    if not job.start("rename"):
+        raise RuntimeError("Another job is running; try again when it has finished")
+    try:
+        job.message = f"Renaming {old} to {new}"
+        c = db.conn()
+        tables = [("files", ("rel_path", "logical_path")), ("images", ("rel_path", "logical_path")),
+                  ("archives", ("rel_path",)), ("overrides", ("prefix",)), ("path_maps", ("prefix",)),
+                  ("main_pictures", ("path",)), ("folder_layouts", ("folder",))]
+        cached = [(dict(r), cache_path(r)) for t in ("files", "images")
+                  for r in c.execute(f"SELECT * FROM {t}") if _under(r["rel_path"], old)]
+        os.rename(src, dst)
+        try:
+            for table, cols in tables:
+                for r in c.execute(f"SELECT rowid AS rid, {', '.join(cols)} FROM {table}").fetchall():
+                    vals = [new + r[col][len(old):] if r[col] and _under(r[col], old) else r[col] for col in cols]
+                    if vals != [r[col] for col in cols]:
+                        c.execute(f"UPDATE OR REPLACE {table} SET {', '.join(f'{col}=?' for col in cols)} "
+                                  "WHERE rowid=?", (*vals, r["rid"]))
+            for o, n in folder_moves():  # earlier renames inside or of this folder
+                if _under(n, old):
+                    c.execute("UPDATE folder_moves SET new=? WHERE old=?", (new + n[len(old):], o))
+            if not c.execute("SELECT 1 FROM folder_moves WHERE new=?", (new,)).fetchone():
+                c.execute("INSERT OR REPLACE INTO folder_moves(old, new) VALUES (?, ?)", (old, new))
+            c.commit()
+        except Exception:
+            c.rollback()
+            os.rename(dst, src)
+            raise
+        for row, before in cached:  # keep rendered previews instead of rendering them again
+            row["rel_path"] = new + row["rel_path"][len(old):]
+            after = cache_path(row)
+            if before.exists() and not after.exists():
+                after.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(before, after)
+        reclassify()
+        job.message = f"Renamed {old} to {new}"
+        return new
+    finally:
+        job.finish()
+
+
 def folder_layouts() -> dict[str, int]:
     return {r["folder"]: r["depth"] for r in db.conn().execute("SELECT folder, depth FROM folder_layouts")}
 
@@ -166,7 +262,9 @@ def migrate_layouts() -> bool:
             return False  # can't tell copied folders from uploads; try again once SOURCE_PATH is mounted
         changed = False
     else:
-        uploaded = _top_entries(config.LIBRARY_DIR) - _top_entries(config.SOURCE_DIR)
+        moves = folder_moves()
+        copied = {PurePosixPath(moved_path(e, moves)).parts[0] for e in _top_entries(config.SOURCE_DIR)}
+        uploaded = _top_entries(config.LIBRARY_DIR) - copied
         known = set(folder_layouts())
         c.executemany("INSERT INTO folder_layouts(folder, depth) VALUES (?, 0)",
                       [(f,) for f in sorted(uploaded - known)])
@@ -243,8 +341,9 @@ def import_library():
             files.append(Path(root) / n)
     job.total = len(files)
     copied = skipped = 0
+    moves = folder_moves()
     for i, f in enumerate(files):
-        rel = f.relative_to(src)
+        rel = Path(moved_path(f.relative_to(src).as_posix(), moves))
         target = dst / rel
         job.done = i
         job.message = f"Copying {rel}"

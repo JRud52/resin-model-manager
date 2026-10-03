@@ -602,20 +602,25 @@ $("#releaseCreatorBtn").onclick = () => {
   const rel = state.releases.find((r) => r.release === state.release);
   openCreators([state.release], rel?.creator || "");
 };
-$("#renameCreatorBtn").onclick = () => {
+$("#renameCreatorBtn").onclick = async () => {
   const dlg = $("#renameCreatorDlg"), form = $("form", dlg);
+  const { folders } = await api(`/api/creators/folders?creator=${encodeURIComponent(state.creator)}`).catch(() => ({ folders: [] }));
   form.reset();
   $("#rcOld").textContent = state.creator;
+  $("#rcFolders").textContent = folders.join(", ");
+  for (const id of ["#rcFolderRow", "#rcFolderNote"]) $(id).classList.toggle("hidden", !folders.length);
   form.name.value = state.creator;
   dlg.showModal();
   form.name.select();
 };
 $("#renameCreatorDlg").addEventListener("close", async () => {
   const dlg = $("#renameCreatorDlg"), action = dlg.returnValue;
-  const name = action === "reset" ? "" : $("form", dlg).name.value.trim();
-  if (!["save", "reset"].includes(action) || (action === "save" && (!name || name === state.creator))) return;
+  const form = $("form", dlg);
+  const name = action === "reset" ? "" : form.name.value.trim();
+  const folders = action === "save" && form.folders.checked && !$("#rcFolderRow").classList.contains("hidden");
+  if (!["save", "reset"].includes(action) || (action === "save" && (!name || (name === state.creator && !folders)))) return;
   try {
-    const r = await api("/api/creators/rename", { method: "POST", body: JSON.stringify({ creator: state.creator, name }) });
+    const r = await api("/api/creators/rename", { method: "POST", body: JSON.stringify({ creator: state.creator, name, folders }) });
     state.creator = r.creator || null;  // after an undo the original name isn't known here; show everyone
   } catch (err) { alert(err.message); }
   refresh();
