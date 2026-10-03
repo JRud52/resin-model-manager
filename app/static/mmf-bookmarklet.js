@@ -121,29 +121,44 @@
     return out;
   }
   // The library lists only a small picture per item; its own page has every image in full size.
-  // Image links look like https://dl.myminifactory.com/object-assets/<folder>/images/720X720-name.jpg,
-  // with the size prefix left out for the original. Images of other items on the page live in other folders.
+  // The page also shows other people's prints and other items, so only the item's own image
+  // list is used: the objects with an "is_primary" flag (the format the library itself uses),
+  // from the image folder the item's library picture or the page's og:image is in.
+  // Image links look like https://dl.myminifactory.com/object-assets/<folder>/images/720X720-name.jpg.
   function folderOf(u) { var m = /\/object-assets\/([^\/]+)\//.exec(u || ""); return m && m[1]; }
-  function sizeOf(u) { var m = /\/images\/(\d+)X\d+-/i.exec(u); return m ? Number(m[1]) : 1e9; }
+  function enclosing(text, pos) {  // the {...} around pos, parsed, or null
+    for (var a = pos, depth = 0; a >= 0; a--) {
+      if (text[a] === "}") depth++;
+      else if (text[a] === "{" && !depth--) break;
+    }
+    for (var b = a, d = 0; a >= 0 && b < text.length; b++) {
+      if (text[b] === "{") d++;
+      else if (text[b] === "}" && !--d) {
+        try { return JSON.parse(text.slice(a, b + 1)); } catch (err) { return null; }
+      }
+    }
+    return null;
+  }
+  function bestUrl(img) {
+    var f = img.large || img.standard || img.original || img.thumbnail || {};
+    return typeof f === "string" ? f : f.url || img.url || "";
+  }
   async function pageImages(it) {
     if (!/^https:\/\/www\.myminifactory\.com\//.test(it.url)) return [];
     var r = await fetch(it.url, { credentials: "include" });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    var html = (await r.text()).replace(/\\\//g, "/").replace(/&amp;/g, "&");
-    var found = html.match(/https:\/\/[^"'\s<>()\\]+\/object-assets\/[^"'\s<>()\\]+?\/images\/[^"'\s<>()\\?#]+?\.(?:jpe?g|png|webp|gif)/gi) || [];
-    var og = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i.exec(html) ||
-      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i.exec(html);
-    var folder = [folderOf(it.image), folderOf(og && og[1]), folderOf(found[0])].filter(function (f) {
-      return f && found.some(function (u) { return folderOf(u) === f; });
-    })[0];
-    var best = {}, order = [];
-    found.filter(function (u) { return folderOf(u) === folder; }).forEach(function (u) {
-      var key = u.replace(/^https:\/\/[^\/]+/, "").replace(/\/images\/\d+X\d+-/i, "/images/");
-      if (!(key in best)) { order.push(key); best[key] = u; return; }
-      var a = sizeOf(best[key]), b = sizeOf(u);  // closest to 720 from above, else the largest
-      if ((b >= 720 && (a < 720 || b < a)) || (a < 720 && b > a)) best[key] = u;
-    });
-    return order.map(function (k) { return best[k]; });
+    var text = (await r.text()).replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\\"/g, '"').replace(/\\\//g, "/");
+    var og = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i.exec(text) ||
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i.exec(text);
+    var byFolder = {}, re = /"is_primary"\s*:/g, m;
+    while ((m = re.exec(text))) {
+      var img = enclosing(text, m.index), u = img && bestUrl(img), f = folderOf(u);
+      if (!f || !/^https:\/\//.test(u)) continue;
+      var list = byFolder[f] || (byFolder[f] = []);
+      if (list.indexOf(u) < 0) list.push(u);
+    }
+    var folder = [folderOf(it.image), folderOf(og && og[1])].filter(function (f) { return f && byFolder[f]; })[0];
+    return folder ? byFolder[folder] : [];  // not sure which images are the item's: keep the library picture
   }
   async function galleries(items) {
     var next = 0, done = 0, batch = [];

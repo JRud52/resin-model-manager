@@ -64,14 +64,18 @@ def fake_mmf(route):
                          "groups": {"items": [{"id": "all/9", "name": "All"}, {"id": "42", "name": "March"}]}}], page)
     elif "/data-library/group/42" in url:
         body = page_of(TRIBE, page)
-    elif url.endswith("/object/3d-print-2"):  # the item's page has every image, in several sizes
-        a = f"{CDN}/object-assets/aa2/images"
+    elif url.endswith("/object/3d-print-2"):  # the item's page: its own images, other people's prints, other items
+        a, other = f"{CDN}/object-assets/aa2/images", f"{CDN}/object-assets/bb9/images"
+        own = [{"is_primary": n == "a", "thumbnail": {"url": f"{a}/230X230-wyrm-{n}.png"},
+                "large": {"url": f"{a}/720X720-wyrm-{n}.png"}} for n in "abcd"]
+        data = {"object": {"id": 2, "images": own},
+                "makes": [{"user": "someone", "image": f"{CDN}/object-assets/mk7/images/my-print.png",
+                           "images": [{"url": f"{CDN}/object-assets/mk7/images/720X720-my-print.png"}]}],
+                "related": [{"id": 9, "images": [{"is_primary": True, "large": {"url": f"{other}/720X720-other.png"}}]}]}
         return route.fulfill(status=200, content_type="text/html", body=f"""<html><head>
             <meta property="og:image" content="{a}/720X720-wyrm-a.png"></head><body>
-            <img src="{a}/230X230-wyrm-a.png"><img src="{a}/230X230-wyrm-b.png"><img src="{a}/230X230-wyrm-c.png">
-            <script>var data = {json.dumps({"images": [f"{a}/720X720-wyrm-b.png", f"{a}/wyrm-c.png",
-                                                       f"{a}/720X720-wyrm-c.png", f"{a}/720X720-wyrm-d.png"]})};</script>
-            <a href="/object/9"><img src="{CDN}/object-assets/bb9/images/230X230-other.png"></a></body></html>""")
+            <img src="{CDN}/object-assets/mk7/images/230X230-my-print.png">
+            <script>self.__next_f.push([1, {json.dumps(json.dumps(data))}])</script></body></html>""")
     elif url.endswith("/download/2"):
         return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
                              headers={"Content-Disposition": 'attachment; filename="Ancient_Wyrm.zip"'})
