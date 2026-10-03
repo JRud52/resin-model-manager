@@ -89,6 +89,33 @@
     };
   }
 
+  // A tribe group's objects: inline in the tribes list when the site includes them,
+  // else from a link the group carries, else /data-library/group/{id}.
+  async function groupObjects(g, label) {
+    var inline = list(g.items || (g.objects && (g.objects.items || g.objects)));
+    if (inline.length && inline.length >= (Number(g.total_count) || inline.length)) return inline;
+    var links = [];
+    list(g.apis).concat([g.url, g.objects_url, g.api_url, g.data_url]).forEach(function (u) {
+      u = u && (u.url || u);
+      if (typeof u === "string" && /^(\/|https:\/\/www\.myminifactory\.com\/)/.test(u) && !/^\/?$/.test(u)) links.push(u);
+    });
+    links.push("/data-library/group/" + encodeURIComponent(g.id));
+    var last;
+    for (var u of links) {
+      try { return await pages(u, label); } catch (err) { last = err; }
+    }
+    if (inline.length) return inline;
+    throw last;
+  }
+  // The keys and short values of a group, to see what the site sends when a group can't be read.
+  function sample(g) {
+    var out = {};
+    Object.keys(g || {}).forEach(function (k) {
+      var v = g[k];
+      out[k] = v && typeof v === "object" ? (Array.isArray(v) ? "[" + v.length + "]" : "{" + Object.keys(v).slice(0, 6).join(",") + "}") : v;
+    });
+    return out;
+  }
   function fileName(r, url, given, fallback) {
     var cd = r.headers.get("Content-Disposition") || "";
     var m = /filename\*=UTF-8''([^;]+)/i.exec(cd) || /filename="?([^";]+)"?/i.exec(cd);
@@ -135,16 +162,22 @@
       (await pages("/data-library/campaigns", "pledges")).forEach(function (o) { items.push(slim(o, "pledge")); });
     });
     await section("tribe", "tribes", async function () {
-      var tribes = await pages("/data-library/tribes", "tribes");
+      var tribes = await pages("/data-library/tribes", "tribes"), failed = [];
       for (var t of tribes) {
         var groups = list(t.groups && (t.groups.items || t.groups));
         var own = groups.filter(function (g) { return !/^all\//.test(String(g.id)); });
         for (var g of (own.length ? own : groups)) {
-          var objs = await pages("/data-library/group/" + g.id, (t.name || "tribe") + " · " + (g.name || ""));
           var name = [t.name, own.length > 1 ? g.name : ""].filter(Boolean).join(" · ");
-          objs.forEach(function (o) { items.push(slim(o, "tribe", name)); });
+          try {
+            (await groupObjects(g, (t.name || "tribe") + " · " + (g.name || ""))).forEach(function (o) { items.push(slim(o, "tribe", name)); });
+          } catch (err) {
+            failed.push(err.message + " " + JSON.stringify(sample(g)).slice(0, 300));
+          }
         }
       }
+      // Items from the groups that worked are kept; the section counts as incomplete so
+      // tribe items found by earlier syncs aren't dropped.
+      if (failed.length) throw new Error(failed.length + " tribe group(s) failed: " + failed.slice(0, 3).join(" | "));
     });
     var payload = { type: "mmf-library", items: items, complete: complete, problems: problems };
     if (!complete.length) {

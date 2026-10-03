@@ -101,28 +101,99 @@ def clear():
         c.execute("DELETE FROM settings WHERE key='mmf_synced'")
 
 
-def _local_index() -> tuple[dict, dict]:
-    """name key -> local release, and name key -> (release, model_id) for models."""
-    releases, models = {}, {}
-    for r in db.conn().execute("SELECT release, model, MIN(model_id) model_id FROM files WHERE hidden=0 "
-                               "GROUP BY release, model"):
-        releases.setdefault(classify.name_key(r["release"]), r["release"])
-        models.setdefault(classify.name_key(r["model"]), (r["release"], r["model_id"]))
-    releases.pop("", None)
-    models.pop("", None)
-    return releases, models
+# ---------------------------------------------------------------- matching to the local library
+
+# Words in shop titles that don't name the thing itself.
+_GENERIC = {
+    "bundle", "release", "releases", "collection", "pack", "set", "kit", "miniature", "miniatures",
+    "mini", "minis", "figure", "figures", "tabletop", "wargaming", "wargame", "dnd", "rpg", "of", "a", "an",
+    "with", "by", "in", "x", "edition", "complete", "full", "patreon", "tribe", "kickstarter", "ks",
+}
+_MONTHS = {m: str(i) for i, ms in enumerate((
+    ("january", "jan"), ("february", "feb"), ("march", "mar"), ("april", "apr"), ("may",), ("june", "jun"),
+    ("july", "jul"), ("august", "aug"), ("september", "sep", "sept"), ("october", "oct"),
+    ("november", "nov"), ("december", "dec")), 1) for m in ms}
 
 
-def _match(name: str, releases: dict, models: dict):
-    key = classify.name_key(name)
-    if not key:
-        return None
-    if key in releases:
-        return {"release": releases[key], "model_id": None}
-    if key in models:
-        release, model_id = models[key]
-        return {"release": release, "model_id": model_id}
-    return None
+def _tokens(name: str) -> set[str]:
+    """Comparable words of a name: 'Dwarf_Warriors - Sept 2023 (Supported)' -> {dwarf, warriors, 9, 2023}."""
+    out = set()
+    for w in classify.name_key(name).split():
+        if re.fullmatch(r"(?:19|20)\d\d(?:0[1-9]|1[0-2])", w):  # 202309
+            out.update((w[:4], str(int(w[4:]))))
+            continue
+        w = _MONTHS.get(w, w)
+        if w.isdigit():
+            w = str(int(w))
+        if w not in _GENERIC:
+            out.add(w)
+    return out
+
+
+class _Index:
+    """Local releases and models by word, to match MyMiniFactory titles against."""
+
+    def __init__(self):
+        self.entries = []  # (tokens, creator tokens, release, model_id or None)
+        self.by_word: dict[str, list[int]] = {}
+        seen_releases = set()
+        for r in db.conn().execute("SELECT release, model, MAX(creator) creator, MIN(model_id) model_id "
+                                   "FROM files WHERE hidden=0 GROUP BY release, model"):
+            creator = _tokens(r["creator"] or "")
+            if r["release"] not in seen_releases:
+                seen_releases.add(r["release"])
+                self._add(_tokens(r["release"]) - creator or _tokens(r["release"]), creator, r["release"], None)
+            self._add(_tokens(r["model"]) - creator or _tokens(r["model"]), creator, r["release"], r["model_id"])
+
+    def _add(self, toks, creator, release, model_id):
+        if not toks:
+            return
+        i = len(self.entries)
+        self.entries.append((toks, creator, release, model_id))
+        for w in toks:
+            self.by_word.setdefault(w, []).append(i)
+
+    def match(self, name: str, creator: str = ""):
+        ctoks = _tokens(creator)
+        toks = _tokens(name)
+        toks = toks - ctoks or toks
+        if not toks:
+            return None
+        best, best_score = None, 0.0
+        for i in {i for w in toks for i in self.by_word.get(w, ())}:
+            etoks, ecreator, release, model_id = self.entries[i]
+            common = len(toks & etoks)
+            jaccard = common / len(toks | etoks)
+            same_creator = bool(ctoks) and (ctoks <= ecreator or ecreator <= ctoks) and bool(ecreator)
+            contained = common == min(len(toks), len(etoks))
+            if not same_creator and all(w.isdigit() for w in toks & etoks):
+                continue  # "September 2023" alone says nothing without the creator
+            ok = (jaccard >= 0.6 or (contained and common >= 2)
+                  or (contained and same_creator and any(len(w) >= 5 for w in toks & etoks)))
+            if not ok:
+                continue
+            score = jaccard + (0.3 if same_creator else 0) + (0.05 if model_id is None else 0)
+            if score > best_score:
+                best, best_score = {"release": release, "model_id": model_id}, score
+        return best
+
+
+_index_cache: tuple = (None, None)
+
+
+def _local_index() -> _Index:
+    """Built once per change of the indexed files (and corrections), not per request."""
+    global _index_cache
+    sig = tuple(db.conn().execute(
+        "SELECT COUNT(*), MAX(id), TOTAL(length(release) + length(model) + length(creator) + hidden) FROM files"
+    ).fetchone())
+    if _index_cache[0] != sig:
+        _index_cache = (sig, _Index())
+    return _index_cache[1]
+
+
+def _match(name: str, creator: str, index: _Index):
+    return index.match(name, creator)
 
 
 def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200) -> dict:
@@ -137,12 +208,12 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200)
     link_map: dict[int, list] = {}
     for r in c.execute("SELECT * FROM mmf_links ORDER BY source, collection"):
         link_map.setdefault(r["item_id"], []).append({"source": r["source"], "collection": r["collection"]})
-    releases, models = _local_index()
+    index = _local_index()
     out = []
     for r in rows:
         d = _item(r)
         d["sources"] = link_map.get(r["id"], [])
-        d["local"] = _match(r["name"], releases, models)
+        d["local"] = _match(r["name"], r["creator"], index)
         if missing and d["local"]:
             continue
         out.append(d)
@@ -165,7 +236,7 @@ def item(oid: int) -> dict | None:
     d = _item(r)
     d["sources"] = [dict(x) for x in c.execute(
         "SELECT source, collection FROM mmf_links WHERE item_id=? ORDER BY source, collection", (oid,))]
-    d["local"] = _match(r["name"], *_local_index())
+    d["local"] = _match(r["name"], r["creator"], _local_index())
     return d
 
 
@@ -210,8 +281,8 @@ def status() -> dict:
         "SELECT source, COUNT(DISTINCT item_id) n FROM mmf_links GROUP BY source")}
     missing = 0
     if total:
-        releases, models = _local_index()
-        missing = sum(1 for r in c.execute("SELECT name FROM mmf_items") if not _match(r["name"], releases, models))
+        index = _local_index()
+        missing = sum(1 for r in c.execute("SELECT name, creator FROM mmf_items") if not _match(r["name"], r["creator"], index))
     queued = c.execute("SELECT COUNT(*) FROM mmf_items WHERE queued=1").fetchone()[0]
     return {"total": total, "missing": missing, "sources": by_source, "queued": queued,
             "synced": float(synced[0]) if synced else None}
