@@ -62,6 +62,14 @@ def fake_mmf(route):
                          "groups": {"items": [{"id": "all/9", "name": "All"}, {"id": "42", "name": "March"}]}}], page)
     elif "/data-library/group/42" in url:
         body = page_of(TRIBE, page)
+    elif url.endswith("/object/3d-print-2"):  # the item's page has every image, in several sizes
+        a = f"{CDN}/object-assets/aa2/images"
+        return route.fulfill(status=200, content_type="text/html", body=f"""<html><head>
+            <meta property="og:image" content="{a}/720X720-wyrm-a.png"></head><body>
+            <img src="{a}/230X230-wyrm-a.png"><img src="{a}/230X230-wyrm-b.png"><img src="{a}/230X230-wyrm-c.png">
+            <script>var data = {json.dumps({"images": [f"{a}/720X720-wyrm-b.png", f"{a}/wyrm-c.png",
+                                                       f"{a}/720X720-wyrm-c.png", f"{a}/720X720-wyrm-d.png"]})};</script>
+            <a href="/object/9"><img src="{CDN}/object-assets/bb9/images/230X230-other.png"></a></body></html>""")
     elif url.endswith("/download/2"):
         return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
                              headers={"Content-Disposition": 'attachment; filename="Ancient_Wyrm.zip"'})
@@ -83,7 +91,7 @@ with sync_playwright() as p:
     ctx = browser.new_context(viewport={"width": 1280, "height": 860})
     ctx.route("https://www.myminifactory.com/**", fake_mmf)
     ctx.route(f"{CDN}/**", lambda r: r.fulfill(
-        status=200, content_type="image/png", body=png(int(r.request.url.rsplit("/", 1)[1].split(".")[0]))))
+        status=200, content_type="image/png", body=png(sum(map(ord, r.request.url.rsplit("/", 1)[1])) % 7)))
     app = ctx.new_page()
     app.goto(BASE)
     app.click("#mmfSyncBtn")
@@ -136,7 +144,11 @@ with sync_playwright() as p:
     # MyMiniFactory items open in the model window with all their pictures.
     app.click("#grid .card.mmf[data-mmf='2']")
     app.wait_for_selector("#modelDlg.mmf-mode[open]")
-    assert app.locator("#mFiles [data-mmf-pic]").count() == 3
+    wyrm_images = get("/api/mmf/2")["images"]
+    assert [u.rsplit("/", 1)[1] for u in wyrm_images] == [
+        "720X720-wyrm-a.png", "720X720-wyrm-b.png", "720X720-wyrm-c.png", "720X720-wyrm-d.png"], wyrm_images
+    assert get("/api/mmf/1")["images"] == [f"{CDN}/1.png"], "pages without images keep the library picture"
+    assert app.locator("#mFiles [data-mmf-pic]").count() == 4
     assert app.locator("#mEditBtn").is_hidden() and app.locator("#mMapBtn").is_hidden()
     app.wait_for_function("document.getElementById('mPreview').naturalWidth > 0")
     if SHOTS:

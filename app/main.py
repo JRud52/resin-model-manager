@@ -600,6 +600,17 @@ def mmf_queue():
     return mmf.queue()
 
 
+@app.get("/api/mmf/gallery")
+def mmf_gallery_needed():
+    """Items the bookmarklet should read full-size images for."""
+    return mmf.gallery_needed()
+
+
+@app.post("/api/mmf/gallery")
+def mmf_set_gallery(payload: dict):
+    return {"saved": mmf.set_galleries(payload.get("items") or [])}
+
+
 @app.get("/api/mmf/{oid}")
 def mmf_item(oid: int):
     d = mmf.item(oid)

@@ -121,8 +121,12 @@ groups them by **release** and **model**, separates **supported** and
   library* in that window marks an item; the next time you click the bookmark on
   myminifactory.com it downloads the marked items with your login and the Resin
   Models window it opens saves them into the library as Creator / Item. Your
-  MyMiniFactory login is never stored by the app. Items whose name matches a local release or model are marked *in your
-  library*; *Not in your library* lists the rest. Searching shows matching
+  MyMiniFactory login is never stored by the app. The first time the bookmark
+  sees an item it also reads the item's own page for all its images in full
+  size (the library list only has one small picture). Items whose name shares
+  its words with a local release or model (by the same creator, or a close
+  match by anyone) are marked *in your library*; *Not in your library* lists
+  the rest. Searching shows matching
   MyMiniFactory items above the local results. If the bookmark can't reach the
   Resin Models window it saves `myminifactory-library.json` instead, which you
   upload in the same dialog. This relies on MyMiniFactory's website, not a

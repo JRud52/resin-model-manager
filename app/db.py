@@ -118,7 +118,8 @@ CREATE TABLE IF NOT EXISTS mmf_items (
     images TEXT NOT NULL DEFAULT '[]',     -- JSON list of picture URLs
     downloads TEXT NOT NULL DEFAULT '[]',  -- JSON list of {url, name} the bookmarklet can fetch
     queued INTEGER NOT NULL DEFAULT 0,     -- 1 = download into the library on the next sync
-    download_note TEXT NOT NULL DEFAULT '' -- result of the last download attempt
+    download_note TEXT NOT NULL DEFAULT '', -- result of the last download attempt
+    gallery TEXT NOT NULL DEFAULT ''       -- JSON list of full-size image URLs from the item's page; '' = not read yet
 );
 -- Where each item is in the MyMiniFactory library: source purchase | pledge | tribe,
 -- collection the campaign or tribe name ('' for plain purchases).
@@ -185,7 +186,8 @@ def init():
         c.execute("ALTER TABLE overrides ADD COLUMN creator TEXT")
     mmf_cols = {r["name"] for r in c.execute("PRAGMA table_info(mmf_items)")}
     for col, decl in (("images", "TEXT NOT NULL DEFAULT '[]'"), ("downloads", "TEXT NOT NULL DEFAULT '[]'"),
-                      ("queued", "INTEGER NOT NULL DEFAULT 0"), ("download_note", "TEXT NOT NULL DEFAULT ''")):
+                      ("queued", "INTEGER NOT NULL DEFAULT 0"), ("download_note", "TEXT NOT NULL DEFAULT ''"),
+                      ("gallery", "TEXT NOT NULL DEFAULT ''")):
         if col not in mmf_cols:
             c.execute(f"ALTER TABLE mmf_items ADD COLUMN {col} {decl}")
     c.commit()

@@ -16,8 +16,8 @@
 </main>
 <script>
 // Opened by the sync bookmarklet (static/mmf-bookmarklet.js) from a MyMiniFactory tab.
-// Saves the library it sends, then hands it the items marked "Download to library"
-// and uploads each file it downloads into the library.
+// Saves the library it sends, then hands it the items still missing full-size images
+// and the items marked "Download to library", and stores what comes back.
 const MMF = /^https:\/\/([a-z0-9-]+\.)*myminifactory\.com$/;
 const msg = document.getElementById("msg");
 const json = async (url, opts) => {
@@ -26,7 +26,7 @@ const json = async (url, opts) => {
   if (!r.ok) throw new Error(res.detail || r.statusText);
   return res;
 };
-let work = Promise.resolve(), summary = "", saved = 0;
+let work = Promise.resolve(), summary = "", saved = 0, queue = [];
 const failed = new Set();  // item ids
 function finish(e, text) {
   msg.textContent = text;
@@ -36,7 +36,7 @@ function finish(e, text) {
 }
 async function handle(e) {
   const d = e.data;
-  if (d.type === "mmf-progress") msg.textContent = d.text;
+  if (d.type === "mmf-progress") msg.textContent = summary ? `${summary} ${d.text}` : d.text;
   if (d.type === "mmf-library") {
     const problems = (d.problems || []).join("; ");
     if (!(d.complete || []).length) summary = "Couldn't read your MyMiniFactory library. " + problems;
@@ -48,12 +48,16 @@ async function handle(e) {
           (problems ? ` Some parts couldn't be read: ${problems}` : "");
       } catch (err) { summary = "Saving failed: " + err.message; }
     }
-    let queue = [];
+    let gallery = [];
+    queue = [];
     try { queue = await json("/api/mmf/queue"); } catch {}
-    if (!queue.length) { finish(e, summary); return; }
-    msg.textContent = `${summary} Downloading ${queue.length} item${queue.length === 1 ? "" : "s"} into your library…`;
-    e.source.postMessage({ type: "mmf-queue", queue }, e.origin);
+    try { gallery = await json("/api/mmf/gallery"); } catch {}
+    if (!queue.length && !gallery.length) { finish(e, summary); return; }
+    msg.textContent = gallery.length ? `${summary} Reading full-size images…`
+      : `${summary} Downloading ${queue.length} item${queue.length === 1 ? "" : "s"} into your library…`;
+    e.source.postMessage({ type: "mmf-queue", queue, gallery }, e.origin);
   }
+  if (d.type === "mmf-gallery") await json("/api/mmf/gallery", { method: "POST", body: JSON.stringify({ items: d.items }) });
   if (d.type === "mmf-file") {
     msg.textContent = `Saving ${d.name} into your library…`;
     const p = new URLSearchParams({ path: `${d.folder}/${d.name}`, size: d.blob.size, depth: d.depth });
@@ -70,7 +74,7 @@ async function handle(e) {
     if (d.ok) saved++; else failed.add(d.id);
   }
   if (d.type === "mmf-downloads-done") {
-    finish(e, `${summary} Downloaded ${saved} item${saved === 1 ? "" : "s"} into your library` +
+    finish(e, !queue.length ? summary : `${summary} Downloaded ${saved} item${saved === 1 ? "" : "s"} into your library` +
       (failed.size ? `; ${failed.size} failed (see the item in Resin Models).` : "."));
   }
 }

@@ -222,7 +222,8 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200)
 
 def _item(r) -> dict:
     d = dict(r)
-    d["images"] = json.loads(d.get("images") or "[]") or ([d["image"]] if d.get("image") else [])
+    gallery = json.loads(d.pop("gallery", "") or "[]")
+    d["images"] = gallery or json.loads(d.get("images") or "[]") or ([d["image"]] if d.get("image") else [])
     d["downloads"] = len(json.loads(d.get("downloads") or "[]"))
     d["queued"] = bool(d.get("queued"))
     return d
@@ -265,6 +266,30 @@ def queue() -> list[dict]:
                      "downloads": json.loads(r["downloads"] or "[]"),
                      "folder": f"{creator}/{name}" if creator else name, "depth": 1 if creator else 0})
     return out
+
+
+def gallery_needed() -> list[dict]:
+    """Items whose page hasn't been read for its full-size images yet."""
+    return [{"id": r["id"], "url": r["url"], "image": r["image"]} for r in db.conn().execute(
+        "SELECT id, url, image FROM mmf_items WHERE gallery='' ORDER BY id")]
+
+
+def set_galleries(entries: list) -> int:
+    """Store the images the bookmarklet read from item pages: [{"id", "images": [url, ...]}]."""
+    rows = []
+    for e in entries[:MAX_ITEMS]:
+        if not isinstance(e, dict) or not isinstance(e.get("images"), list):
+            continue
+        try:
+            oid = int(e.get("id"))
+        except (TypeError, ValueError):
+            continue
+        images = list(dict.fromkeys(u for u in (_url(x) for x in e["images"][:60] if isinstance(x, str)) if u))
+        rows.append((json.dumps(images), oid))
+    c = db.conn()
+    with c:
+        c.executemany("UPDATE mmf_items SET gallery=? WHERE id=?", rows)
+    return len(rows)
 
 
 def download_result(oid: int, ok: bool, note: str):
