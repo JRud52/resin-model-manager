@@ -381,6 +381,44 @@ def creators(q: str = "", tags: str = ""):
     return out
 
 
+class CreatorRenameIn(BaseModel):
+    creator: str     # the name as shown now
+    name: str = ""   # how to show it; blank undoes earlier renames
+    folders: bool = False  # also rename the creator's folders in the library to the new name
+
+
+@app.get("/api/creators/folders")
+def creator_folders(creator: str):
+    """The library folders a creator's name comes from (what a rename with folders=true moves)."""
+    return {"folders": library.creator_folders(creator)}
+
+
+@app.post("/api/creators/rename")
+def rename_creator(body: CreatorRenameIn):
+    """Change how a creator is shown, everywhere (local releases and MyMiniFactory items).
+    Stored by the creator's loose name key, so it is kept across re-indexing and syncs.
+    With folders, the creator's folders in the library copy are renamed too."""
+    if not body.creator.strip():
+        raise HTTPException(400, "creator is required")
+    moved = []
+    if body.folders and body.name.strip():
+        folders = library.creator_folders(body.creator)
+        new = library.safe_folder_name(body.name)
+        if not new:
+            raise HTTPException(400, "That name can't be used as a folder name")
+        for f in folders:  # check every move before making any
+            target = "/".join([*f.split("/")[:-1], new])
+            if target.casefold() != f.casefold() and (config.LIBRARY_DIR / target).exists():
+                raise HTTPException(409, f"A folder called {target} is already in the library")
+        try:
+            moved = [library.rename_folder(f, body.name) for f in folders]
+        except (ValueError, RuntimeError) as e:
+            raise HTTPException(409, str(e))
+    name = mmf.rename_creator(body.creator, body.name)
+    library.reclassify()
+    return {"creator": name, "folders": moved}
+
+
 class CreatorIn(BaseModel):
     releases: list[str]
     creator: str = ""  # blank goes back to the folder guess or import rule

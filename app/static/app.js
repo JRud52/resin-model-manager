@@ -124,6 +124,7 @@ async function loadModels(append = false) {
   $("#crumbs").textContent = [who, state.release ?? "All releases"].filter(Boolean).join(" / ") + ` · ${state.total} models`;
   $("#releaseCreatorBtn").classList.toggle("hidden", state.release === null && state.creator !== "");
   $("#releaseCreatorBtn").textContent = state.release === null ? "Set creator for several" : "Set creator";
+  $("#renameCreatorBtn").classList.toggle("hidden", !state.creator || state.release !== null);
   $("#activeTags").innerHTML = state.tags.map((t) => `<span class="badge tag on" data-tag="${esc(t)}" title="Remove filter">${esc(t)} ✕</span>`).join("");
   $("#releaseTagBtn").classList.toggle("hidden", state.release === null);
   $("#combineBtn").classList.toggle("hidden", state.total < 2 || !!state.picked);
@@ -349,6 +350,7 @@ async function loadMmf(append) {
   $("#crumbs").textContent = `MyMiniFactory / ${who}${state.mmfMissing ? "Not in your library" : "All items"} · ${state.total} items`;
   if (state.picked) endPicking();
   for (const id of ["#releaseCreatorBtn", "#releaseTagBtn", "#releaseImages", "#mmfStrip", "#combineBtn"]) $(id).classList.add("hidden");
+  $("#renameCreatorBtn").classList.toggle("hidden", !state.creator);
   $("#activeTags").innerHTML = "";
   const empty = $("#empty");
   empty.innerHTML = state.mmf?.total ? "Nothing on MyMiniFactory matches." : "Your MyMiniFactory library hasn't been synced yet. Click <b>Sync</b> next to MyMiniFactory in the sidebar.";
@@ -600,6 +602,29 @@ $("#releaseCreatorBtn").onclick = () => {
   const rel = state.releases.find((r) => r.release === state.release);
   openCreators([state.release], rel?.creator || "");
 };
+$("#renameCreatorBtn").onclick = async () => {
+  const dlg = $("#renameCreatorDlg"), form = $("form", dlg);
+  const { folders } = await api(`/api/creators/folders?creator=${encodeURIComponent(state.creator)}`).catch(() => ({ folders: [] }));
+  form.reset();
+  $("#rcOld").textContent = state.creator;
+  $("#rcFolders").textContent = folders.join(", ");
+  for (const id of ["#rcFolderRow", "#rcFolderNote"]) $(id).classList.toggle("hidden", !folders.length);
+  form.name.value = state.creator;
+  dlg.showModal();
+  form.name.select();
+};
+$("#renameCreatorDlg").addEventListener("close", async () => {
+  const dlg = $("#renameCreatorDlg"), action = dlg.returnValue;
+  const form = $("form", dlg);
+  const name = action === "reset" ? "" : form.name.value.trim();
+  const folders = action === "save" && form.folders.checked && !$("#rcFolderRow").classList.contains("hidden");
+  if (!["save", "reset"].includes(action) || (action === "save" && (!name || (name === state.creator && !folders)))) return;
+  try {
+    const r = await api("/api/creators/rename", { method: "POST", body: JSON.stringify({ creator: state.creator, name, folders }) });
+    state.creator = r.creator || null;  // after an undo the original name isn't known here; show everyone
+  } catch (err) { alert(err.message); }
+  refresh();
+});
 $("#editCreatorsBtn").onclick = () => state.creator === ""
   ? openCreators([], "", true)
   : openCreators(state.creator !== null ? state.releases.map((r) => r.release) : [], state.creator || "");

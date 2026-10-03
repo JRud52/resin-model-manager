@@ -146,6 +146,33 @@ def creator_key(name: str) -> str:
     return "".join(w for w in words if w not in _SHOP_WORDS) or "".join(words)
 
 
+def creator_names() -> dict[str, str]:
+    """creator_key -> the name the user gave that creator in the app."""
+    return {r["key"]: r["name"] for r in db.conn().execute("SELECT key, name FROM creator_names")}
+
+
+def display_creator(name: str, names: dict[str, str]) -> str:
+    """How a creator name found in the files or on MyMiniFactory is shown."""
+    return names.get(creator_key(name), name) if name else name
+
+
+def rename_creator(old: str, new: str) -> str:
+    """Show creator `old` (as currently shown) as `new` from now on; blank `new` undoes renames.
+    Covers every spelling already shown as `old`, so renaming twice keeps working."""
+    new = " ".join(new.split())[:200]
+    c = db.conn()
+    keys = {creator_key(old)} | {k for k, v in creator_names().items() if v.casefold() == old.casefold()}
+    keys.discard("")
+    for k in keys:
+        if new:
+            c.execute("INSERT INTO creator_names(key, name) VALUES (?, ?) "
+                      "ON CONFLICT(key) DO UPDATE SET name=excluded.name", (k, new))
+        else:
+            c.execute("DELETE FROM creator_names WHERE key=?", (k,))
+    c.commit()
+    return new
+
+
 class _Index:
     """Local releases and models by word, to match MyMiniFactory titles against."""
 
@@ -229,26 +256,28 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
     where, args = _search(q)
     rows = c.execute(f"""SELECT i.* FROM mmf_items i {where}
                          ORDER BY i.creator COLLATE NOCASE, i.name COLLATE NOCASE""", args).fetchall()
+    names = creator_names()
     if creator is not None:
         key = creator_key(creator)
-        rows = [r for r in rows if creator_key(r["creator"]) == key]
+        rows = [r for r in rows if creator_key(display_creator(r["creator"], names)) == key]
     link_map: dict[int, list] = {}
     for r in c.execute("SELECT * FROM mmf_links ORDER BY source, collection"):
         link_map.setdefault(r["item_id"], []).append({"source": r["source"], "collection": r["collection"]})
     index = _local_index()
     out = []
     for r in rows:
-        d = _item(r)
+        d = _item(r, names)
         d["sources"] = link_map.get(r["id"], [])
-        d["local"] = _match(r["name"], r["creator"], index)
+        d["local"] = _match(r["name"], d["creator"], index)
         if missing and d["local"]:
             continue
         out.append(d)
     return {"total": len(out), "items": out[offset:offset + limit]}
 
 
-def _item(r) -> dict:
+def _item(r, names: dict[str, str] | None = None) -> dict:
     d = dict(r)
+    d["creator"] = display_creator(d["creator"], creator_names() if names is None else names)
     gallery = json.loads(d.pop("gallery", "") or "[]")
     d["images"] = gallery or json.loads(d.get("images") or "[]") or ([d["image"]] if d.get("image") else [])
     d["downloads"] = len(json.loads(d.get("downloads") or "[]"))
@@ -260,9 +289,11 @@ def creators(q: str = "") -> dict[str, dict]:
     """creator_key -> {"creator": the most used spelling, "items": count} of the synced items."""
     where, args = _search(q)
     spellings: dict[str, dict[str, int]] = {}
+    renamed = creator_names()
     for r in db.conn().execute(f"SELECT i.creator FROM mmf_items i {where}", args):
-        names = spellings.setdefault(creator_key(r["creator"]), {})
-        names[r["creator"]] = names.get(r["creator"], 0) + 1
+        shown = display_creator(r["creator"], renamed)
+        names = spellings.setdefault(creator_key(shown), {})
+        names[shown] = names.get(shown, 0) + 1
     return {k: {"creator": max(v, key=v.get), "items": sum(v.values())} for k, v in spellings.items()}
 
 
@@ -274,7 +305,7 @@ def item(oid: int) -> dict | None:
     d = _item(r)
     d["sources"] = [dict(x) for x in c.execute(
         "SELECT source, collection FROM mmf_links WHERE item_id=? ORDER BY source, collection", (oid,))]
-    d["local"] = _match(r["name"], r["creator"], _local_index())
+    d["local"] = _match(r["name"], d["creator"], _local_index())
     return d
 
 
@@ -295,10 +326,10 @@ def _folder_name(s: str) -> str:
 def queue() -> list[dict]:
     """Items to download on the next bookmarklet run, with the library folder each goes to:
     Creator/Item (read as Creator / Release) or just Item when the creator is unknown."""
-    out = []
+    out, names = [], creator_names()
     for r in db.conn().execute("SELECT * FROM mmf_items WHERE queued=1 ORDER BY name COLLATE NOCASE"):
         name = _folder_name(r["name"])
-        creator = _folder_name(r["creator"]) if r["creator"] else ""
+        creator = _folder_name(display_creator(r["creator"], names)) if r["creator"] else ""
         out.append({"id": r["id"], "name": r["name"], "url": r["url"],
                      "downloads": json.loads(r["downloads"] or "[]"),
                      "folder": f"{creator}/{name}" if creator else name, "depth": 1 if creator else 0})

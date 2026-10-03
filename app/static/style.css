@@ -44,6 +44,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .side-title .link { all: unset; cursor: pointer; float: right; text-transform: none; letter-spacing: 0; color: var(--accent); }
 .side-title .link:hover { text-decoration: underline; }
 #creatorDlg { max-width: min(560px, 96vw); }
+#renameCreatorDlg { max-width: min(440px, 96vw); }
+#renameCreatorDlg .card-form { background: none; padding: 0; margin: 0; }
 #creatorDlg .card-form { background: none; padding: 0; margin: 0; }
 #creatorDlg .dlg-head { margin-bottom: 0; }
 #creatorReleases { max-height: 45vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
