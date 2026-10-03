@@ -120,30 +120,18 @@
     });
     return out;
   }
-  // The library lists only a small picture per item; its own page has every image in full size.
-  // Image links look like https://dl.myminifactory.com/object-assets/<folder>/images/720X720-name.jpg,
-  // with the size prefix left out for the original. Images of other items on the page live in other folders.
-  function folderOf(u) { var m = /\/object-assets\/([^\/]+)\//.exec(u || ""); return m && m[1]; }
-  function sizeOf(u) { var m = /\/images\/(\d+)X\d+-/i.exec(u); return m ? Number(m[1]) : 1e9; }
+  // The library lists only a small picture per item. MyMiniFactory's own object data
+  // (/api/v2/objects/{id}, read with the user's login) lists just the listing's images, in
+  // several sizes; the item page also shows other people's prints, so it isn't used.
   async function pageImages(it) {
-    if (!/^https:\/\/www\.myminifactory\.com\//.test(it.url)) return [];
-    var r = await fetch(it.url, { credentials: "include" });
+    var r = await fetch("/api/v2/objects/" + encodeURIComponent(it.id), {
+      credentials: "include", headers: { Accept: "application/json" } });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    var html = (await r.text()).replace(/\\\//g, "/").replace(/&amp;/g, "&");
-    var found = html.match(/https:\/\/[^"'\s<>()\\]+\/object-assets\/[^"'\s<>()\\]+?\/images\/[^"'\s<>()\\?#]+?\.(?:jpe?g|png|webp|gif)/gi) || [];
-    var og = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i.exec(html) ||
-      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i.exec(html);
-    var folder = [folderOf(it.image), folderOf(og && og[1]), folderOf(found[0])].filter(function (f) {
-      return f && found.some(function (u) { return folderOf(u) === f; });
-    })[0];
-    var best = {}, order = [];
-    found.filter(function (u) { return folderOf(u) === folder; }).forEach(function (u) {
-      var key = u.replace(/^https:\/\/[^\/]+/, "").replace(/\/images\/\d+X\d+-/i, "/images/");
-      if (!(key in best)) { order.push(key); best[key] = u; return; }
-      var a = sizeOf(best[key]), b = sizeOf(u);  // closest to 720 from above, else the largest
-      if ((b >= 720 && (a < 720 || b < a)) || (a < 720 && b > a)) best[key] = u;
-    });
-    return order.map(function (k) { return best[k]; });
+    var o = await r.json();
+    return list(o.images && (o.images.items || o.images)).map(function (img) {
+      var f = img && (img.large || img.standard || img.original) || {};
+      return typeof f === "string" ? f : f.url;
+    }).filter(function (u) { return /^https:\/\//.test(u || ""); });
   }
   async function galleries(items) {
     var next = 0, done = 0, batch = [];

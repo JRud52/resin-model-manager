@@ -205,4 +205,8 @@ def init():
                       ("gallery", "TEXT NOT NULL DEFAULT ''")):
         if col not in mmf_cols:
             c.execute(f"ALTER TABLE mmf_items ADD COLUMN {col} {decl}")
+    # Galleries read by 0.8.4-0.8.7 could hold other people's prints; read them again on the next sync.
+    if not c.execute("SELECT 1 FROM settings WHERE key='mmf_gallery_v'").fetchone():
+        c.execute("UPDATE mmf_items SET gallery=''")
+        c.execute("INSERT INTO settings(key, value) VALUES('mmf_gallery_v', '2')")
     c.commit()
