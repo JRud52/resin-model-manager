@@ -311,7 +311,7 @@ async function refresh() { loadCreators(); loadTags(); loadMmfSide(); await load
 
 // ------------------------------------------------------------ MyMiniFactory
 
-const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe" };
+const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe", group: "Group", mmfplus: "MMF+", free: "Free" };
 
 async function loadMmfSide() {
   const s = await api("/api/mmf/status");
@@ -320,7 +320,7 @@ async function loadMmfSide() {
       <span class="name">${label}</span><span class="muted">${n}</span></li>`;
   $("#mmfList").innerHTML = s.total
     ? li(false, "All items", s.total) + li(true, "Not in your library", s.missing)
-    : `<li class="muted small" style="cursor:default"><span>Click <b>Sync</b> to list your purchases, pledges and tribes here.</span></li>`;
+    : `<li class="muted small" style="cursor:default"><span>Click <b>Sync</b> to list your MyMiniFactory library here.</span></li>`;
 }
 $("#mmfList").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-mmf-missing]"); if (!li) return;
@@ -418,21 +418,18 @@ async function openMmfModel(id) {
 function renderMmfModel() {
   const m = state.mmfItem;
   const kinds = [...new Set(m.sources.map((s) => MMF_SOURCES[s.source] || s.source))];
+  // MyMiniFactory only lets the browser itself download files (the bookmark can't read them),
+  // so the file is downloaded there and imported with the release and creator filled in.
   const dl = m.local
     ? `<p class="small">This is in your library${m.local.release ? ` as <b>${esc(m.local.release)}</b>` : ""}.</p>
-       <div class="row"><button id="mmfOpenLocal" class="primary">Open in your library</button>
-       <button id="mmfDownload">Download again</button></div>`
-    : m.queued
-      ? `<p class="small"><b>Waiting to download.</b> Go to myminifactory.com and click your <b>Sync to Resin Models</b> bookmark;
-         it downloads everything waiting into your library.</p>
-         <div class="row"><a class="button-like" href="https://www.myminifactory.com/library" target="_blank" rel="noopener">Open MyMiniFactory ↗</a>
-         <button id="mmfCancel">Don't download</button></div>`
-      : `<div class="row"><button id="mmfDownload" class="primary">Download to library</button></div>`;
-  const note = m.download_note ? `<p class="small err">Last download failed: ${esc(m.download_note)}. You can also download it on MyMiniFactory and drop the file into <b>Import files</b>.</p>` : "";
+       <div class="row"><button id="mmfOpenLocal" class="primary">Open in your library</button></div>`
+    : `<p class="small">Download it on MyMiniFactory, then import the file here.</p>
+       <div class="row"><a class="button-like primary" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Download on MyMiniFactory ↗</a>
+       <button id="mmfImport">Import the download…</button></div>`;
   $("#mFiles").innerHTML = `<div class="mmf-info">
       <div class="badges">${kinds.map((k) => `<span class="badge">${esc(k)}</span>`).join("")}
         <a class="badge link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Open on MyMiniFactory ↗</a></div>
-      ${dl}${note}
+      ${dl}
     </div>
     <div class="group-title">Images (${m.images.length})</div>
     <div class="mmf-pics">${m.images.map((u, i) => `<button data-mmf-pic="${i}" title="Image ${i + 1}">
@@ -458,12 +455,6 @@ function showMmfPicture(i) {
 }
 function markMmfPic() {
   document.querySelectorAll("#mFiles [data-mmf-pic]").forEach((b) => b.classList.toggle("active", +b.dataset.mmfPic === state.mmfPic));
-}
-
-async function setMmfQueued(queued) {
-  state.mmfItem = { ...state.mmfItem, ...(await api(`/api/mmf/${state.mmfItem.id}/queue`, { method: "POST", body: JSON.stringify({ queued }) })) };
-  renderMmfModel();
-  state.dirty = true;
 }
 
 async function mmfBookmarklet() {
@@ -911,8 +902,7 @@ $("#mFiles").addEventListener("click", (e) => {
   if (state.mmfItem && $("#modelDlg").classList.contains("mmf-mode")) {
     const pic = e.target.closest("[data-mmf-pic]");
     if (pic) showMmfPicture(+pic.dataset.mmfPic);
-    if (e.target.closest("#mmfDownload")) setMmfQueued(true);
-    if (e.target.closest("#mmfCancel")) setMmfQueued(false);
+    if (e.target.closest("#mmfImport")) importMmfItem(state.mmfItem);
     if (e.target.closest("#mmfOpenLocal")) {
       const local = state.mmfItem.local;
       if (local.model_id) openModel(local.model_id);
@@ -1313,6 +1303,13 @@ function renderQueue(msg) {
     : upload.skipped ? `${upload.skipped} ignored (not model files, images or archives).` : "");
   $("#uploadBtn").disabled = upload.busy || !q.length;
   $("#clearQueue").disabled = upload.busy || !q.length;
+}
+// Import dialog ready for a MyMiniFactory download: release = the item's name, creator = its creator.
+function importMmfItem(m) {
+  $("#modelDlg").close();
+  $("#uploadFolder").value = m.name;
+  $("#uploadCreator").value = m.creator || "";
+  openImport();
 }
 function openImport() { if (!$("#importDlg").open) $("#importDlg").showModal(); renderQueue(); }
 $("#importBtn").onclick = openImport;

@@ -3,9 +3,9 @@
    app's address. It reads the library the way the site's own Library page does
    and hands it to the app's /mmf-sync window (postMessage, because an https page
    can't post to a plain-http NAS address). If that window can't be reached, the
-   library is saved as a file to upload in the app instead. Afterwards it downloads
-   the items marked "Download to library" (it has the login, the NAS doesn't) and
-   hands each file to that window, which uploads it into the library. */
+   library is saved as a file to upload in the app instead. Afterwards it reads the
+   full-size images of items that don't have them yet. Files aren't downloaded:
+   MyMiniFactory serves them from a host page scripts can't read. */
 (function () {
   var APP = "__APP__";
   if (!/(^|\.)myminifactory\.com$/.test(location.hostname)) {
@@ -20,9 +20,9 @@
   window.addEventListener("message", function (e) {
     if (e.origin !== APP || !e.data) return;
     if (e.data.type === "mmf-ready") { ready = true; queue.splice(0).forEach(send); }
-    if (e.data.type === "mmf-queue") {
+    if (e.data.type === "mmf-images") {
       finished = true;
-      galleries(e.data.gallery || []).then(function () { download(e.data.queue || []); });
+      galleries(e.data.gallery || []).then(function () { send({ type: "mmf-images-done" }); });
     }
     if (e.data.type === "mmf-done") { finished = true; box.textContent = e.data.text; setTimeout(function () { box.remove(); }, 8000); }
   });
@@ -73,18 +73,11 @@
       return typeof i === "string" ? i : f.url;
     }).filter(Boolean);
   }
-  function downloads(o) {
-    var archives = list(o.archives).filter(function (a) { return a && a.download_url; })
-      .map(function (a) { return { url: a.download_url, name: String(a.path || "").split("/").pop() }; });
-    if (archives.length) return archives;
-    if (o.archive_download_url) return [{ url: o.archive_download_url, name: "" }];
-    return list(o.files && (o.files.items || o.files)).filter(function (f) { return f && f.download_url; })
-      .map(function (f) { return { url: f.download_url, name: f.filename || "" }; });
-  }
+
   function slim(o, source, collection) {
     var pledge = list(o.pledges && (o.pledges.items || o.pledges))[0];
     return {
-      images: pictures(o), downloads: downloads(o),
+      images: pictures(o), downloads: [],
       id: o.id, name: o.name, source: source,
       collection: collection || (pledge && pledge.name) || "",
       // Display name first ("The Print Goes Ever On"), the account slug only as a fallback.
@@ -134,6 +127,7 @@
     }).filter(function (u) { return /^https:\/\//.test(u || ""); });
   }
   async function galleries(items) {
+    items = items.slice(0, 400);  // a big first sync reads the rest on the next runs
     var next = 0, done = 0, batch = [];
     async function worker() {
       while (next < items.length) {
@@ -147,41 +141,134 @@
     await Promise.all([worker(), worker(), worker()]);
     if (batch.length) send({ type: "mmf-gallery", items: batch });
   }
-  function fileName(r, url, given, fallback) {
-    var cd = r.headers.get("Content-Disposition") || "";
-    var m = /filename\*=UTF-8''([^;]+)/i.exec(cd) || /filename="?([^";]+)"?/i.exec(cd);
-    var name = m ? decodeURIComponent(m[1]) : given || decodeURIComponent(new URL(r.url || url, location.href).pathname.split("/").pop());
-    return (name || fallback).replace(/[\\/:*?"<>|]+/g, "-");
+  // ---- The library as the site's Library page reads it now (2026): one list of every item
+  // (objectPreviews), the names of tribe, group, MMF+ and campaign releases from their own
+  // metadata lists, and names, links and pictures from /api/data-library/objects.
+  var KINDS = { PURCHASE: "purchase", FRONTIER: "pledge", TRIBE: "tribe", USER_GROUP: "group",
+                MMFPLUS: "mmfplus", DOWNLOAD: "free" };
+  async function api(path) {
+    var r = await fetch(path, { credentials: "include", headers: { Accept: "application/json" } });
+    if (/\/login/.test(r.url)) throw new Error("not logged in");
+    if (!r.ok) throw new Error(path + ": HTTP " + r.status);
+    return r.json();
   }
-  // Downloads each queued item with the user's login and passes the files to the
-  // Resin Models window, which uploads them into the library folder it chose.
-  async function download(items) {
-    for (var i = 0; i < items.length; i++) {
-      var it = items[i], links = it.downloads && it.downloads.length ? it.downloads : [{ url: "/download/" + it.id, name: "" }];
-      var got = 0, note = "";
-      for (var j = 0; j < links.length; j++) {
-        try {
-          say("Downloading " + it.name + (links.length > 1 ? " (" + (j + 1) + " of " + links.length + ")" : "") + "…");
-          var r = await fetch(links[j].url, { credentials: "include" });
-          if (/\/login/.test(r.url)) throw new Error("not logged in");
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          if (/text\/html/.test(r.headers.get("Content-Type") || "")) throw new Error("MyMiniFactory sent a web page instead of a file");
-          var blob = await r.blob();
-          send({ type: "mmf-file", id: it.id, folder: it.folder, depth: it.depth,
-                 name: fileName(r, links[j].url, links[j].name, it.name + ".zip"), blob: blob });
-          got++;
-        } catch (err) {
-          note = (err && err.message) || String(err);
-          if (/Failed to fetch|NetworkError|Load failed/.test(note)) note = "MyMiniFactory didn't let the bookmark read the download";
+  // Release id -> name, for each source that has releases. A list that can't be read only
+  // leaves those releases unnamed.
+  async function releaseNames(problems) {
+    var names = {}, base = "/api/data-library/";
+    async function each(listPath, releasesPath, label, nameOf) {
+      try {
+        var owners = list(await api(base + listPath));
+        for (var i = 0; i < owners.length; i++) {
+          var o = owners[i];
+          say("Reading " + label + " releases… " + (i + 1) + " of " + owners.length);
+          try {
+            var rel = await api(base + releasesPath + encodeURIComponent(o.id));
+            var rels = Array.isArray(rel) ? rel : list(rel.pledges).concat(list(rel.addons));
+            rels.forEach(function (x) {
+              if (!x || x.id == null) return;
+              names[label + ":" + x.id] = nameOf(o, x.label || x.name || "");
+              names[label + ":of:" + x.id] = o;
+            });
+            names[label + ":owner:" + o.id] = o.name || "";
+          } catch (err) { problems.push(label + " " + (o.name || o.id) + ": " + err.message); }
         }
-      }
-      send({ type: "mmf-item-done", id: it.id, ok: got === links.length, note: got === links.length ? "" : note });
+      } catch (err) { problems.push(label + ": " + err.message); }
     }
-    send({ type: "mmf-downloads-done" });
+    await each("tribes_metadata", "tribe_releases_metadata/", "tribe", function (o, l) { return l; });
+    await each("userGroups_metadata", "userGroup_releases_metadata/", "group", function (o, l) { return l || o.name; });
+    await each("frontiers_metadata", "frontier_releases_metadata/", "pledge", function (o) { return o.name; });
+    try {
+      list(await api(base + "mmfplus_releases_metadata")).forEach(function (x) { names["mmfplus:" + x.id] = x.label || x.name || ""; });
+    } catch (err) { problems.push("MMF+: " + err.message); }
+    return names;
+  }
+  function field(release, key) {  // "type:campaign-tier;orderId:1;tierId:83699" -> "83699"
+    var m = new RegExp("(?:^|;)" + key + ":([^;]+)").exec(release == null ? "" : String(release));
+    return m && m[1];
+  }
+  async function readLibrary(items, complete, problems) {
+    var previews = list(await api("/api/data-library/objectPreviews"));
+    if (!previews.length) throw new Error("the library list was empty");
+    say("Found " + previews.length + " library entries. Reading release names…");
+    var names = await releaseNames(problems);
+    var objects = previews.filter(function (p) { return p && (p.type || "object") === "object" && p.originalId; });
+    var ids = Object.keys(objects.reduce(function (a, p) { a[p.originalId] = 1; return a; }, {}));
+    var details = {};
+    for (var i = 0; i < ids.length; i += 200) {
+      say("Reading item details… " + Math.min(i + 200, ids.length) + " of " + ids.length);
+      try {
+        var q = ids.slice(i, i + 200).map(function (id) { return "ids[]=" + encodeURIComponent(id); }).join("&");
+        list(await api("/api/data-library/objects?" + q)).forEach(function (d) { if (d) details[d.originalId] = d; });
+      } catch (err) { problems.push("item details: " + err.message); }
+    }
+    // Bundles bought from the store: their names, for the parts listed one by one.
+    var bundleIds = {};
+    previews.forEach(function (p) {
+      var b = field(p.release, "bundleId") || p.bundleId;
+      if (b) bundleIds[b] = 1;
+    });
+    var bundles = {}, bids = Object.keys(bundleIds);
+    for (var j = 0; j < bids.length; j += 100) {
+      try {
+        var bq = bids.slice(j, j + 100).map(function (id) { return "ids[]=" + encodeURIComponent(id); }).join("&");
+        var got = await api("/api/data-library/bundles_metadata?" + bq);
+        (Array.isArray(got) ? got : list(got)).forEach(function (b) {  // id "bundle-1123", originalId 1123
+          var id = b && (b.originalId != null ? b.originalId : String(b.id).replace(/^bundle-/, ""));
+          if (id != null) bundles[id] = b.name || b.label || b.title || "";
+        });
+      } catch (err) { problems.push("bundle names: " + err.message); }
+    }
+    // Tribes are named after the creator's account ("midguardminiatures's Tribe"); use their display name.
+    var creatorById = {};
+    objects.forEach(function (p) {
+      var c = (details[p.originalId] || {}).creator || {};
+      if (p.creatorId != null && (c.name || p.creatorName)) creatorById[p.creatorId] = c.name || p.creatorName;
+    });
+    function releaseName(source, p) {
+      if (source === "pledge" && names["pledge:" + p.release] === undefined) return names["pledge:owner:" + p.campaignId];
+      var label = names[source + ":" + p.release];
+      if (label !== undefined && source === "tribe") {
+        var t = names["tribe:of:" + p.release] || {};
+        var who = creatorById[t.id] ? creatorById[t.id] + "'s Tribe" : t.name;
+        return [who, label].filter(Boolean).join(" · ");
+      }
+      if (label !== undefined) return label;
+      // Tribe and store entries bought through a campaign or as a bundle say so in their release.
+      var tier = field(p.release, "tierId"), bundle = field(p.release, "bundleId") || p.bundleId;
+      return (tier && names["pledge:" + tier]) || (bundle && bundles[bundle]) || "";
+    }
+    objects.forEach(function (p) {
+      var source = KINDS[p.source];
+      if (!source) return;
+      var d = details[p.originalId] || {}, creator = d.creator || {};
+      var pics = [d.previewUrl].concat(list(d.images).map(function (im) { return im && im.url; })).filter(Boolean);
+      var thumb = list(d.images).map(function (im) { return im && (im.thumbnailUrl || im.url); }).filter(Boolean)[0];
+      items.push({
+        id: p.originalId, name: d.name || p.name, source: source,
+        collection: p.release != null || p.campaignId != null || p.bundleId != null ? releaseName(source, p) || "" : "",
+        creator: creator.name || p.creatorName || creator.username || p.creatorUsername || "",
+        creator_url: creator.username ? "https://www.myminifactory.com/users/" + encodeURIComponent(creator.username) : "",
+        url: d.url ? "https://www.myminifactory.com/object/3d-print-" + d.url : "/object/" + p.originalId,
+        image: thumb || d.previewUrl || "", images: pics, downloads: []
+      });
+    });
+    Object.keys(KINDS).forEach(function (k) { complete.push(KINDS[k]); });
   }
 
   (async function () {
     var items = [], complete = [], problems = [];
+    try {
+      await readLibrary(items, complete, problems);
+    } catch (err) {  // the older library pages, for a site that doesn't have the new list
+      items = []; complete = [];
+      problems.push("library list: " + err.message);
+      await readOldLibrary(items, complete, problems);
+    }
+    finishRead(items, complete, problems);
+  })();
+
+  async function readOldLibrary(items, complete, problems) {
     async function section(source, label, fn) {
       try { await fn(); complete.push(source); }
       catch (err) { problems.push(label + ": " + err.message); }
@@ -210,6 +297,10 @@
       // tribe items found by earlier syncs aren't dropped.
       if (failed.length) throw new Error(failed.length + " tribe group(s) failed: " + failed.slice(0, 3).join(" | "));
     });
+  }
+
+  function finishRead(items, complete, problems) {
+    if (problems.length > 5) problems = problems.slice(0, 5).concat(["and " + (problems.length - 5) + " more"]);
     var payload = { type: "mmf-library", items: items, complete: complete, problems: problems };
     if (!complete.length) {
       say("Couldn't read your MyMiniFactory library. " + problems.join("; "));
@@ -227,5 +318,5 @@
       box.textContent = "Resin Models didn't answer, so the list was saved as myminifactory-library.json. " +
         "Upload it in Resin Models under MyMiniFactory › Sync.";
     }, 15000);
-  })();
+  }
 })();

@@ -23,7 +23,7 @@ def obj(i, name, creator="Dragon Forge", **extra):
 
 WYRM_PICS = {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/2.png"}}, {"large": {"url": f"{CDN}/7.png"}},
                        {"standard": {"url": f"{CDN}/8.png"}}]}
-PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS, archive_download_url="/download/2"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
+PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
 PLEDGES = [obj(4, "Siege Tower", creator="Castle_Works!", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
 # "Mini Forge" here. The shaman's display name is on its designer, its user_name is the account slug.
 def small(name):  # the library's own small picture link
@@ -41,24 +41,67 @@ def png(i):
     return b.getvalue()
 
 
-def wyrm_zip():
-    import io
-    import zipfile
-    b = io.BytesIO()
-    with zipfile.ZipFile(b, "w") as z:
-        z.writestr("Wyrm_supported.stl", "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\n"
-                   "vertex 0 10 0\nendloop\nendfacet\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 0 10 0\n"
-                   "vertex 0 0 10\nendloop\nendfacet\nendsolid t\n")
-    return b.getvalue()
-
-
 def page_of(items, page, size=2):
     return {"total_count": len(items), "items": items[(page - 1) * size:page * size]}
+
+
+# The library as the site reads it since 2026: one list, release names from metadata lists,
+# details from /api/data-library/objects. Switched on for the last part of the test.
+NEW_API = []
+TRIBE_RELEASE = "type:tribes-tier;owner:77;tribe:9;tier:1;yearmonth:202309"
+PREVIEWS = [
+    {"originalId": 1, "id": "object-1", "type": "object", "name": "Lich King - Supported", "source": "PURCHASE",
+     "creatorName": "Dragon Forge"},
+    {"originalId": 3, "id": "bundle-3", "type": "bundle", "name": "Some Bundle", "source": "PURCHASE"},
+    {"originalId": 5, "id": "object-5", "type": "object", "name": "Goblin Boss", "source": "TRIBE",
+     "release": TRIBE_RELEASE, "creatorName": "MiniForge", "creatorId": 9},
+    {"originalId": 14, "id": "object-14", "type": "object", "name": "Tadpole Hero", "source": "TRIBE",
+     "release": "type:campaign-tier;orderId:5;tierId:901", "creatorName": "Frog Folk"},
+    {"originalId": 15, "id": "object-15", "type": "object", "name": "Shroud Arm", "source": "PURCHASE",
+     "release": "type:store-bundle;orderId:6;bundleId:1123", "creatorName": "Fleshcraft"},
+    {"originalId": 11, "id": "object-11", "type": "object", "name": "Orc Warlord", "source": "USER_GROUP",
+     "release": "32391", "creatorName": "Orc Works"},
+    {"originalId": 12, "id": "object-12", "type": "object", "name": "Plus Paladin", "source": "MMFPLUS", "release": "39939"},
+    {"originalId": 13, "id": "object-13", "type": "object", "name": "Free Frog", "source": "DOWNLOAD"},
+    {"originalId": 13, "id": "object-13", "type": "object", "name": "Free Frog", "source": "FRONTIER",
+     "campaignId": 555, "release": "901"},
+]
+NEW_META = {
+    "tribes_metadata": [{"id": 9, "name": "Greenskin Tribe"}],
+    "tribe_releases_metadata/9": [{"id": TRIBE_RELEASE, "label": "09/2023 | tier: Elders"}, {"id": "w", "label": "Welcome Pack"}],
+    "userGroups_metadata": [{"id": 4, "name": "Orc Works"}],
+    "userGroup_releases_metadata/4": [{"id": 32391, "label": "38. OPR April 2023 Rewards"}],
+    "mmfplus_releases_metadata": [{"id": 39939, "label": "September 2023 MMF+ Release"}],
+    "frontiers_metadata": [{"id": 555, "name": "Frog Kingdom"}],
+    "frontier_releases_metadata/555": {"pledges": [{"id": 901, "name": "Tadpole"}], "addons": []},
+    "bundles_metadata": [{"id": "bundle-1123", "originalId": 1123, "name": "Shroudborne"}],
+}
+
+
+def new_api(url):
+    from urllib.parse import parse_qs, unquote, urlparse
+    u = urlparse(url)
+    path = unquote(u.path)[len("/api/data-library/"):]
+    if path == "objectPreviews":
+        return PREVIEWS
+    if path == "objects":
+        ids = parse_qs(u.query).get("ids[]", [])
+        return [{"originalId": int(i), "name": next(p["name"] for p in PREVIEWS if str(p["originalId"]) == i),
+                 "url": f"thing-{i}", "creator": {"username": f"maker-{i}", "name": "" if i == "12" else None},
+                 "previewUrl": f"{CDN}/object-images/p{i}/images/1000X1000-p.png",
+                 "images": [{"url": f"{CDN}/object-images/p{i}/images/720X720-p.png",
+                             "thumbnailUrl": f"{CDN}/object-images/p{i}/images/230X230-p.png"}]} for i in ids]
+    return NEW_META.get(path)
 
 
 def fake_mmf(route):
     url = route.request.url
     page = int(url.split("page=")[1]) if "page=" in url else 1
+    if NEW_API and "/api/data-library/" in url:
+        body = new_api(url)
+        if body is None:
+            return route.fulfill(status=404, body="{}")
+        return route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
     if "/data-library/purchases" in url:
         body = page_of(PURCHASES, page)
     elif "/data-library/campaigns" in url:
@@ -76,11 +119,6 @@ def fake_mmf(route):
             for n in "abcd"]}))
     elif "/api/v2/objects/" in url:
         return route.fulfill(status=404, body="{}")
-    elif url.endswith("/download/2"):
-        return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
-                             headers={"Content-Disposition": 'attachment; filename="Ancient_Wyrm.zip"'})
-    elif "/download/" in url:  # what the real site does when a download isn't allowed
-        return route.fulfill(status=200, content_type="text/html", body="<html>Log in</html>")
     elif "/data-library/" in url:
         return route.fulfill(status=404, body="{}")
     else:
@@ -178,6 +216,7 @@ with sync_playwright() as p:
     assert "Castle Siege" not in app.locator(".side-title[data-sec='releases']").inner_text(), "selection reset on reload"
     app.click(".side-title[data-sec='releases']")
     # Long lists show their first 8 entries and "Show all"; the filter box finds the rest.
+    app.wait_for_function("document.querySelectorAll(\"#releases > li[data-r]:not(.cut):not([data-r=''])\").length === 8")
     rows = app.locator("#releases > li[data-r]:not([data-r=''])").count()
     assert rows > 8 and app.locator("#releases > li[data-r]:not(.cut):not([data-r=''])").count() == 8
     assert app.locator("#releases li[data-r='Kickstarter: Castle Siege']").is_hidden()
@@ -238,34 +277,14 @@ with sync_playwright() as p:
     app.wait_for_function("document.getElementById('mPreview').naturalWidth > 0")
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-modal.png")
-    app.click("#mmfDownload")
-    app.wait_for_selector("#mFiles >> text=Waiting to download")
+    # Files come from MyMiniFactory itself: a link to the item, then the import dialog ready for it.
+    assert app.get_attribute("#mFiles a.button-like.primary", "href") == "https://www.myminifactory.com/object/3d-print-2"
+    app.click("#mmfImport")
+    app.wait_for_selector("#importDlg[open]")
+    assert app.input_value("#uploadFolder") == "Ancient Wyrm" and app.input_value("#uploadCreator") == "Dragon Forge"
     if SHOTS:
-        app.screenshot(path=f"{SHOTS}/mmf-modal-queued.png")
+        app.screenshot(path=f"{SHOTS}/mmf-import.png")
     app.keyboard.press("Escape")
-    post("/api/mmf/4/queue", {"queued": True})
-    assert [q["id"] for q in get("/api/mmf/queue")] == [2, 4]
-    assert get("/api/mmf/queue")[0]["folder"] == "Dragon Forge/Ancient Wyrm"
-
-    # The next bookmarklet run downloads them with the MyMiniFactory login and uploads them.
-    popup.close()
-    with ctx.expect_page() as popup_info:
-        mmf.evaluate(urllib.request.unquote(href[len("javascript:"):]))
-    popup = popup_info.value
-    popup.wait_for_function("document.getElementById('msg').textContent.includes('Downloaded')", timeout=30000)
-    print("download sync:", popup.text_content("#msg"))
-    for _ in range(60):
-        if get("/api/models?q=wyrm")["total"] and not get("/api/status")["job"]["running"]:
-            break
-        time.sleep(0.5)
-    wyrm = get("/api/models?q=wyrm")["items"]
-    assert wyrm and wyrm[0]["release"] == "Ancient Wyrm" and wyrm[0]["creator"] == "Dragon Forge", wyrm
-    item = get("/api/mmf/2")
-    assert item["local"] and not item["queued"] and not item["download_note"], item
-    tower = get("/api/mmf/4")
-    assert tower["queued"] and "web page" in tower["download_note"], tower
-    assert get("/api/mmf/status")["queued"] == 1
-    post("/api/mmf/4/queue", {"queued": False})
 
     popup.close()
     # A later sync where purchases drop an item replaces them; pledges failing keeps the old ones.
@@ -281,6 +300,32 @@ with sync_playwright() as p:
     print("second sync:", popup.text_content("#msg"))
     s = get("/api/mmf/status")
     assert s["sources"] == {"purchase": 2, "pledge": 1, "tribe": 2}, s
+
+    # The whole library from the new list: every source, release names, one item in two sources.
+    popup.close()
+    NEW_API.append(1)
+    def sync(done="Synced"):
+        with ctx.expect_page() as info:
+            mmf.evaluate(urllib.request.unquote(href[len("javascript:"):]))
+        win = info.value
+        win.wait_for_function("(t) => document.getElementById('msg').textContent.includes(t) && "
+                              "!document.getElementById('msg').textContent.includes('Reading')", arg=done, timeout=30000)
+        print("sync:", win.text_content("#msg"))
+        return win
+    popup = sync()
+    s = get("/api/mmf/status")
+    assert s["total"] == 7 and s["sources"] == {"purchase": 2, "tribe": 2, "group": 1, "mmfplus": 1, "free": 1, "pledge": 1}, s
+    items = {m["id"]: m for m in get("/api/mmf")["items"]}
+    assert items[5]["sources"] == [{"source": "tribe", "collection": "MiniForge's Tribe · 09/2023 | tier: Elders"}], items[5]
+    assert items[11]["sources"][0]["collection"] == "38. OPR April 2023 Rewards", items[11]
+    assert items[14]["sources"][0]["collection"] == "Frog Kingdom", items[14]  # bought through the campaign
+    assert items[15]["sources"][0]["collection"] == "Shroudborne", items[15]   # part of a store bundle
+    assert items[12]["sources"][0]["collection"] == "September 2023 MMF+ Release", items[12]
+    assert sorted((x["source"], x["collection"]) for x in items[13]["sources"]) == [("free", ""), ("pledge", "Frog Kingdom")]
+    assert items[1]["url"] == "https://www.myminifactory.com/object/3d-print-thing-1", items[1]
+    assert items[11]["creator"] == "Orc Works" and items[11]["image"].endswith("/230X230-p.png"), items[11]
+    assert items[1]["local"], "still matches the local Lich King"
+
     browser.close()
 
 print("MMF OK")

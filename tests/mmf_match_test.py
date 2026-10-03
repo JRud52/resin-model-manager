@@ -20,6 +20,13 @@ LOCAL = [  # creator, release, model
     ("Archvillain Games", "2023-09 Ironclad Dwarves", "Dwarf Captain"),
     ("Mini Forge", "Dragon Lords", "Red Dragon"),
     ("Mini Forge", "Dragon Lords", "Knight"),
+    ("Titan Forge", "Witch - With Free Dragon Warhammer Mini", "Witch"),
+    ("DM Stash", "Elf Wizard", "Elf Wizard"),
+    ("Bite The Bullet", "BTB 39 23-09 Explorers Fellowship", "Ranger"),
+    ("Lord of the Print", "Welcome Pack", "Goblins"),
+    ("Lord of the Print", "Welcome Pack", "602ab09167439 angel-fighter"),
+    ("Titan Forge", "Rogues", "Halfling Male Rogue"),
+    ("Titan Forge", "Armoury", "Weapon"),
     ("", "Lich_King_Presupported", "Lich King"),
 ]
 c = db.conn()
@@ -40,6 +47,16 @@ CASES = [  # MyMiniFactory title, creator, expected release (None = not in the l
     ("September 2023 Release", "Another Creator", None),  # only a date in common
     ("Black Knight", "Another Creator", None),            # one shared everyday word
     ("Frost Giant Jarl", "Bestiarum Miniatures", "Bestiarum - October 2023"),
+    ("Zelina the Witch Empress - Female Sorceress", "TitanForge", None),  # one word of a long title
+    ("Wood Elf Queen Sillavana (Elf Wizard Druid)", "TwinGoddessMini", None),  # another creator's model
+    ("Explorers Fellowship", "Bite the Bullet", "BTB 39 23-09 Explorers Fellowship"),
+    ("Welcome Pack", "Cast n Play", None),                  # every tribe has one
+    ("Goblins (Pre-Supported)", "Cast n Play", None),       # one word, another creator
+    ("Weapon Pack", "WargamesCrew", None),
+    ("25mm Base for Miniatures", "Fireball Figurines", None),
+    ("Halfling Rogue", "Nerikson", None),                   # close, but another creator
+    ("Welcome Pack", "Lord of the Print", "Welcome Pack"),  # the creator's own
+    ("Angel Fighter", "Rescale Miniatures", "Welcome Pack"),  # the upload id in the local name doesn't count
 ]
 bad = 0
 for title, creator, want in CASES:
@@ -49,4 +66,10 @@ for title, creator, want in CASES:
     bad += got_release != want
     print(f"{flag} {title!r} by {creator or '-'} -> {got_release!r}")
 assert not bad, f"{bad} wrong matches"
+
+# A creator renamed in the app is one creator: Lord of the Print now goes by Rescale Miniatures.
+assert not index.match("Halfling Rogue", "Nerikson")
+mmf.rename_creator("Lord of the Print", "Rescale Miniatures")
+got = mmf._local_index().match("Goblins (Pre-Supported)", "Rescale Miniatures")
+assert got and got["release"] == "Welcome Pack", got
 print("MATCH OK")
