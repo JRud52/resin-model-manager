@@ -302,19 +302,31 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
     return {"total": len(out), "items": out[offset:offset + limit]}
 
 
-def releases(q: str = "", creator: str | None = None, local: set[str] = frozenset()) -> list[dict]:
-    """Releases of the items not in the local library, for the sidebar. Items already in the library
-    show under their local release; `local` (casefolded local release names) drops repeats."""
-    groups: dict[str, dict] = {}
+def grid_items(q: str = "", creator: str | None = None, release: str | None = None, source: str = "") -> list[dict]:
+    """Items for the main grid, shown like local models. source '' or 'missing': items not in the
+    library; 'mmf': all of them, the ones in the library under their local release (grid_release)."""
+    out = []
     for d in _matched_items(q, creator):
-        if d["local"] or d["release"].casefold() in local:
+        if d["local"] and source != "mmf":
             continue
-        g = groups.setdefault(d["release"].casefold(), {"release": d["release"], "creators": {}, "mmf": 0})
+        d["grid_release"] = d["local"]["release"] if d["local"] else d["release"]
+        if release is not None and d["grid_release"].casefold() != release.casefold():
+            continue
+        d["mmf"] = True
+        out.append(d)
+    return out
+
+
+def releases(q: str = "", creator: str | None = None, source: str = "") -> dict[str, dict]:
+    """casefolded release -> {"release", "creator", "mmf": count} of the grid items (see grid_items)."""
+    groups: dict[str, dict] = {}
+    for d in grid_items(q, creator, None, source):
+        g = groups.setdefault(d["grid_release"].casefold(), {"release": d["grid_release"], "creators": {}, "mmf": 0})
         g["mmf"] += 1
         if d["creator"]:
             g["creators"][d["creator"]] = g["creators"].get(d["creator"], 0) + 1
-    return [{"release": g["release"], "creator": max(g["creators"], key=g["creators"].get) if g["creators"] else None,
-             "models": 0, "mmf": g["mmf"]} for g in groups.values()]
+    return {k: {"release": g["release"], "creator": max(g["creators"], key=g["creators"].get) if g["creators"] else None,
+                "mmf": g["mmf"]} for k, g in groups.items()}
 
 
 def _item(r, names: dict[str, str] | None = None) -> dict:
