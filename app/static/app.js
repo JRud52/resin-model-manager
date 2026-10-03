@@ -665,10 +665,9 @@ $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
   });
 })();
 // Long sidebar lists show their first SIDE_SHOWN entries, plus the "All …" rows and whatever is
-// picked, until "Show all" is clicked (remembered in this browser) or the filter box is used.
+// picked, until "Show all" is clicked (until the next reload) or the filter box is used.
 const SIDE_SHOWN = 8;
-let sideAll = [];
-try { sideAll = JSON.parse(localStorage.getItem("sideAll") || "[]"); } catch {}
+let sideAll = [];  // lists expanded with "Show all"; back to short after a reload
 function trimList(id) {
   const ul = $(`#${id}`), input = $(`.side-filter input[data-for="${id}"]`);
   ul.querySelector(".show-more")?.remove();
@@ -695,7 +694,6 @@ document.querySelectorAll("#creators, #releases, #tagList").forEach((ul) => ul.a
   const more = e.target.closest(".show-more[data-more]"); if (!more) return;
   e.stopImmediatePropagation();
   sideAll = more.dataset.more ? [...new Set([...sideAll, ul.id])] : sideAll.filter((x) => x !== ul.id);
-  try { localStorage.setItem("sideAll", JSON.stringify(sideAll)); } catch {}
   trimList(ul.id);
 }, true));
 
