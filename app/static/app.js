@@ -30,61 +30,82 @@ const filterParams = () => {
   return p;
 };
 
+// The releases of the current creator filter; the sidebar lists them under their creator.
 async function loadReleases() {
   const rels = await api(`/api/releases?${filterParams()}`);
-  // Releases only on MyMiniFactory (not downloaded yet) are listed among the local ones.
   state.releases = rels.filter((r) => !r.mmf);
-  const ul = $("#releases");
-  const total = state.releases.reduce((a, r) => a + r.models, 0);
-  const by = (r) => state.creator === null && r.creator ? `<span class="by">${esc(r.creator)}</span>` : "";
-  const li = (r) => {
-    const active = r.mmf ? state.source === "mmf" && state.mmfRelease === r.release : state.source !== "mmf" && state.release === r.release;
-    const tip = `${r.release}${r.creator ? ` by ${r.creator}` : ""}${r.mmf ? ` · on MyMiniFactory, not in your library (${r.mmf} item${r.mmf === 1 ? "" : "s"})` : ""}`;
-    return `<li data-r="${esc(r.release)}" data-mmf="${r.mmf ? 1 : ""}" class="${active ? "active" : ""}" title="${esc(tip)}">
-      <span class="name">${esc(r.release)}${r.mmf ? `<span class="mmf-tag">MMF</span>` : ""}${by(r)}</span><span class="muted">${r.mmf || r.models}</span></li>`;
-  };
-  ul.innerHTML = `<li data-r="" class="${state.release === null && state.source !== "mmf" ? "active" : ""}"><span class="name">All releases</span><span class="muted">${total}</span></li>` +
-    rels.map(li).join("");
   $("#releaseList").innerHTML = state.releases.map((r) => `<option value="${esc(r.release)}">`).join("");
   sectionNow();
 }
 
-$("#releases").addEventListener("click", (e) => {
-  const li = e.target.closest("li[data-r]"); if (!li) return;
-  if (li.dataset.mmf) Object.assign(state, { source: "mmf", mmfMissing: false, mmfRelease: li.dataset.r, release: null, tags: [] });
-  else Object.assign(state, { source: null, mmfRelease: null, release: li.dataset.r === "" ? null : li.dataset.r });
-  $("#sidebar").classList.remove("open");
-  refresh();
-});
+// Creators, each opening to its releases (MyMiniFactory releases not downloaded yet are marked MMF).
+// Which creators are open is remembered in this browser; a search or tag filter opens them all.
+let openKeys = new Set();
+try { openKeys = new Set(JSON.parse(localStorage.getItem("sideOpen") || "[]")); } catch {}
+const saveOpen = () => { try { localStorage.setItem("sideOpen", JSON.stringify([...openKeys])); } catch {} };
 
 async function loadCreators() {
   const p = filterParams(); p.delete("creator");
-  const list = await api(`/api/creators?${p}`);
+  const [list, rels] = await Promise.all([api(`/api/creators?${p}`), api(`/api/releases?${p}`)]);
+  state.tree = { list, rels };
+  $("#creatorOptions").innerHTML = list.filter((c) => c.creator).map((c) => `<option value="${esc(c.creator)}">`).join("");
+  renderCreators();
+}
+
+function renderCreators() {
+  const { list, rels } = state.tree;
   const named = list.filter((c) => c.creator);
   const none = list.find((c) => !c.creator);
-  $("#creatorOptions").innerHTML = named.map((c) => `<option value="${esc(c.creator)}">`).join("");
-  // Creators only on MyMiniFactory are listed too; picking one shows their MyMiniFactory items.
+  const byKey = {};
+  rels.forEach((r) => (byKey[r.key] ??= []).push(r));
+  const filed = new Set();  // a release goes under the first creator with its loose name
+  const openAll = !!(state.q || state.tags.length);
+  const cur = list.find((c) => state.creator !== null && c.creator.toLowerCase() === state.creator.toLowerCase());
+  const relLi = (r, c) => {
+    const active = r.mmf ? state.source === "mmf" && state.mmfRelease === r.release : state.source !== "mmf" && state.release === r.release;
+    const tip = `${r.release}${r.mmf ? ` · on MyMiniFactory, not in your library (${r.mmf} item${r.mmf === 1 ? "" : "s"})` : ""}`;
+    return `<li class="rel ${active ? "active" : ""}" data-r="${esc(r.release)}" data-mmf="${r.mmf ? 1 : ""}" data-c="${esc(c.creator)}" title="${esc(tip)}">
+      <span class="name">${esc(r.release)}${r.mmf ? `<span class="mmf-tag">MMF</span>` : ""}</span><span class="muted">${r.mmf || r.models}</span></li>`;
+  };
   const li = (c, label, cls = "") => {
-    const n = c.releases || c.mmf;
+    const mine = filed.has(c.key) ? [] : byKey[c.key] || [];
+    filed.add(c.key);
+    const open = mine.length && (openAll || openKeys.has(c.key) || c === cur);
+    const n = c.releases + mine.filter((r) => r.mmf).length || c.mmf;
     const tip = [label, c.releases && `${c.releases} release${c.releases === 1 ? "" : "s"}`,
       c.mmf && `${c.mmf} MyMiniFactory item${c.mmf === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
-    return `<li data-c="${esc(c.creator)}" data-local="${c.releases ? 1 : ""}" class="${cls} ${state.creator === c.creator ? "active" : ""}" title="${esc(tip)}">
-      <span class="name">${esc(label)}${c.releases ? "" : `<span class="by">only on MyMiniFactory</span>`}</span><span class="muted">${n}</span></li>`;
+    const active = c === cur && state.release === null && (state.source !== "mmf" || state.mmfRelease === null);
+    return `<li data-c="${esc(c.creator)}" data-key="${esc(c.key)}" data-local="${c.releases ? 1 : ""}" class="${cls} ${active ? "active" : ""}" title="${esc(tip)}">
+      <button class="caret ${mine.length ? "" : "none"}" title="${open ? "Hide" : "Show"} releases">${open ? "▾" : "▸"}</button>
+      <span class="name">${esc(label)}${c.releases ? "" : `<span class="by">only on MyMiniFactory</span>`}</span><span class="muted">${n}</span></li>` +
+      (open ? mine.map((r) => relLi(r, c)).join("") : "");
   };
+  const total = rels.reduce((a, r) => a + r.models, 0);
   // "No creator" sits at the top so releases still missing one are easy to work through.
-  $("#creators").innerHTML = (list.length ? `<li data-all class="${state.creator === null ? "active" : ""}"><span class="name">All creators</span></li>` : "") +
+  $("#creators").innerHTML = (list.length ? `<li data-all class="${state.creator === null && state.release === null && state.source !== "mmf" ? "active" : ""}"><span class="name">All releases</span><span class="muted">${total}</span></li>` : "") +
     (none ? li(none, "No creator", "muted") : "") +
     named.map((c) => li(c, c.creator)).join("") +
     (named.length ? "" : `<li class="muted small" style="cursor:default">Set a creator from a release, or when importing.</li>`);
 }
 
 $("#creators").addEventListener("click", (e) => {
+  const caret = e.target.closest(".caret");
+  if (caret) {
+    const key = caret.closest("li").dataset.key;
+    if (openKeys.has(key)) openKeys.delete(key); else openKeys.add(key);
+    saveOpen(); renderCreators(); return;
+  }
   const li = e.target.closest("li[data-c], li[data-all]"); if (!li) return;
-  state.creator = li.hasAttribute("data-all") ? null : li.dataset.c;
-  state.release = null;
-  state.mmfRelease = null;
-  // The MyMiniFactory view stays on and filters by creator; a creator with nothing local opens it.
-  if (state.source !== "mmf" && state.creator !== null && !li.dataset.local) Object.assign(state, { source: "mmf", mmfMissing: false });
+  if (li.hasAttribute("data-all")) Object.assign(state, { creator: null, release: null, source: null, mmfRelease: null });
+  else if (li.hasAttribute("data-r")) {
+    if (li.dataset.mmf) Object.assign(state, { source: "mmf", mmfMissing: false, mmfRelease: li.dataset.r, release: null, tags: [] });
+    else Object.assign(state, { source: null, mmfRelease: null, release: li.dataset.r });
+    state.creator = li.dataset.c;
+  } else {
+    // A creator with nothing local opens their MyMiniFactory items.
+    Object.assign(state, { creator: li.dataset.c, release: null, mmfRelease: null, source: li.dataset.local ? null : "mmf", mmfMissing: false });
+    openKeys.add(li.dataset.key); saveOpen();
+  }
   $("#sidebar").classList.remove("open");
   refresh();
 });
@@ -641,8 +662,8 @@ $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
 })();
 function sectionNow() {
   const set = (sec, text) => { const el = $(`.side-title[data-sec="${sec}"] .sec-now`); if (el) el.textContent = text ? `· ${text}` : ""; };
-  set("creators", state.creator === null ? "" : state.creator || "No creator");
-  set("releases", state.source === "mmf" ? state.mmfRelease || "" : state.release || "");
+  const rel = state.source === "mmf" ? state.mmfRelease : state.release;
+  set("creators", [state.creator === null ? "" : state.creator || "No creator", rel].filter(Boolean).join(" / "));
   set("mmf", state.source === "mmf" && state.mmfRelease === null ? (state.mmfMissing ? "Not in your library" : "All items") : "");
   set("tags", state.tags.join(", "));
 }

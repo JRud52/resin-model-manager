@@ -124,6 +124,8 @@ def releases(q: str = "", tags: str = "", creator: Optional[str] = None):
         local = {r[0].casefold() for r in c.execute("SELECT DISTINCT release FROM files WHERE hidden=0")}
         out += mmf.releases(q, creator, local)
         out.sort(key=lambda r: r["release"].casefold())
+    for r in out:  # key: loose creator name, to file each release under its creator in the sidebar
+        r["key"] = mmf.creator_key(r["creator"])
     return out
 
 
@@ -375,14 +377,14 @@ def creators(q: str = "", tags: str = ""):
     rows = db.conn().execute(f"""SELECT MIN(creator) creator, COUNT(DISTINCT release) releases,
                                  COUNT(DISTINCT model_id) models FROM files WHERE {where}
                                  GROUP BY creator COLLATE NOCASE ORDER BY creator COLLATE NOCASE""", args).fetchall()
-    out = [{**dict(r), "mmf": 0} for r in rows]
+    out = [{**dict(r), "mmf": 0, "key": mmf.creator_key(r["creator"])} for r in rows]
     if tags.strip():  # tags are only on local models
         return out
     online = mmf.creators(q)
     for c in out:
         hit = online.pop(mmf.creator_key(c["creator"]), None)
         c["mmf"] = hit["items"] if hit else 0
-    out += [{"creator": v["creator"], "releases": 0, "models": 0, "mmf": v["items"]} for v in online.values()]
+    out += [{"creator": v["creator"], "releases": 0, "models": 0, "mmf": v["items"], "key": k} for k, v in online.items()]
     out.sort(key=lambda c: (c["creator"] != "", c["creator"].casefold()))
     return out
 

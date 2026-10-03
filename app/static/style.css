@@ -47,8 +47,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 .side-title .sec-now { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; color: var(--accent); }
 .side-title.collapsed::before { transform: rotate(-90deg); }
 .side-title.collapsed + ul { display: none; }
-#releases .mmf-tag { font-size: 10px; padding: 0 5px; margin-left: 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); vertical-align: 1px; }
-#releases li.active .mmf-tag { color: #08131d; border-color: #08131d; }
+#creators .mmf-tag { font-size: 10px; padding: 0 5px; margin-left: 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); vertical-align: 1px; }
+#creators li.active .mmf-tag { color: #08131d; border-color: #08131d; }
+/* Releases are filed under their creator; the arrow opens a creator without picking it. */
+#creators .caret { all: unset; width: 16px; margin-left: -6px; text-align: center; color: var(--muted); cursor: pointer; flex-shrink: 0; }
+#creators .caret:hover { color: var(--text); }
+#creators .caret.none { visibility: hidden; }
+#creators li.rel { padding: 5px 10px 5px 30px; font-size: 13px; }
 .side-title .link { all: unset; cursor: pointer; margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent); }
 .side-title .link:hover { text-decoration: underline; }
 #creatorDlg { max-width: min(560px, 96vw); }

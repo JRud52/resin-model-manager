@@ -136,27 +136,27 @@ with sync_playwright() as p:
     assert online["Greenskin Tribe"]["creator"] == "MiniForge" and online["Greenskin Tribe"]["models"] == 0
     assert [i["id"] for i in get("/api/mmf?release=greenskin%20tribe")["items"]] == [6], "matched Goblin Boss left out"
     app.reload()
-    app.click("#releases li[data-r='Kickstarter: Castle Siege']")
+    # Releases are filed under their creator; the arrow opens a creator without picking it.
+    app.click("#creators li[data-c='Castle_Works!']:not(.rel) .caret")
+    app.click("#creators li.rel[data-r='Kickstarter: Castle Siege']")
     app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
     assert app.locator("#grid .card.mmf").count() == 1
-    app.click(".side-title[data-sec='releases']")  # sections fold, and stay folded after a reload
-    assert app.locator("#releases").is_hidden()
+    app.click(".side-title[data-sec='creators']")  # sections fold, and stay folded after a reload
+    assert app.locator("#creators").is_hidden()
     app.reload()
-    assert app.locator("#releases").is_hidden()
-    assert "Castle Siege" not in app.locator(".side-title[data-sec='releases']").inner_text(), "selection reset on reload"
-    app.click(".side-title[data-sec='releases']")
-    app.wait_for_selector("#releases li[data-r='Kickstarter: Castle Siege']")
-    app.click("#creators li[data-c='Castle_Works!']")  # only on MyMiniFactory: opens its items there
+    assert app.locator("#creators").is_hidden()
+    assert "Castle Siege" not in app.locator(".side-title[data-sec='creators']").inner_text(), "selection reset on reload"
+    app.click(".side-title[data-sec='creators']")
+    app.wait_for_selector("#creators li.rel[data-r='Kickstarter: Castle Siege']")  # still open
+    app.click("#creators li[data-c='Castle_Works!']:not(.rel)")  # only on MyMiniFactory: opens its items there
     app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
     assert app.locator("#grid .card.mmf").count() == 1
-    app.click("#creators li[data-c='Mini Forge']")  # the MyMiniFactory view stays, now by Mini Forge
-    app.wait_for_selector("#grid .card.mmf[data-mmf='5']")
-    assert app.locator("#grid .card.mmf").count() == 2
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-creator.png")
-    app.click("#releases li[data-r='']")  # back to the local library, still by Mini Forge
+    app.click("#creators li[data-c='Mini Forge']:not(.rel)")  # local releases, with their MyMiniFactory items above
     app.wait_for_selector("#mmfStrip:not(.hidden) .mmf-chip")
     assert app.locator("#mmfStrip .mmf-chip").count() == 2
+    assert app.locator("#creators li.rel[data-r='Greenskin Tribe'][data-mmf='1']").count() == 1, "opened with its releases"
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-creator-local.png")
     app.click("#creators li[data-all]")
