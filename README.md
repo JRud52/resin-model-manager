@@ -135,13 +135,15 @@ groups them by **release** and **model**, separates **supported** and
   MyMiniFactory (the library list only has one or two; a big first sync reads
   400 items per run). Items whose name shares
   its words with a local release or model (by the same creator, or a close
-  match by anyone) are marked *in your library*; *Not in your library* lists
-  the rest. MyMiniFactory creators are added to the Creators list, merged with
+  match by anyone) are marked *in your library*. The rest show up in the grid
+  like any other model, under their release, and are found by search and by the
+  Creators and Releases filters. The MyMiniFactory section of the sidebar
+  filters them: *Only MyMiniFactory*, *Not in your library* or *Hide
+  MyMiniFactory* (click again to show everything). MyMiniFactory creators are
+  added to the Creators list, merged with
   your own creators when the names only differ in spaces, capitals, special
-  characters or words like "Miniatures" ("CobraMode" is "Cobra Mode"); picking
-  one shows their MyMiniFactory items next to your releases. Searching shows matching
-  MyMiniFactory items above the local results. If the bookmark can't reach the
-  Resin Models window it saves `myminifactory-library.json` instead, which you
+  characters or words like "Miniatures" ("CobraMode" is "Cobra Mode"). If the
+  bookmark can't reach the Resin Models window it saves `myminifactory-library.json` instead, which you
   upload in the same dialog. This relies on MyMiniFactory's website, not a
   supported API, so a site change can break it.
 

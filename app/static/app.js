@@ -17,9 +17,9 @@ const fmtSize = (b) => {
 };
 
 // creator: null = all creators, "" = releases without a creator
-// source: null = local library, "mmf" = the synced MyMiniFactory library (mmfMissing: only items not in it)
-// mmfRelease: a MyMiniFactory release not in the library, shown from the Releases list
-const state = { source: null, mmfMissing: false, mmfRelease: null, release: null, creator: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null, releases: [] };
+// source: "" = the library and the synced MyMiniFactory items not in it, "local" = only the library,
+// "mmf" = only MyMiniFactory items, "missing" = only MyMiniFactory items not in the library
+const state = { source: "", release: null, creator: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null, releases: [] };
 const PAGE = 120;
 
 // ------------------------------------------------------------ releases & grid
@@ -27,23 +27,23 @@ const PAGE = 120;
 const filterParams = () => {
   const p = new URLSearchParams({ q: state.q, tags: state.tags.join(",") });
   if (state.creator !== null) p.set("creator", state.creator);
+  if (state.source) p.set("source", state.source);
   return p;
 };
 
 async function loadReleases() {
   const rels = await api(`/api/releases?${filterParams()}`);
-  // Releases only on MyMiniFactory (not downloaded yet) are listed among the local ones.
-  state.releases = rels.filter((r) => !r.mmf);
+  // MyMiniFactory items not in the library are counted in their release (mmf), like models.
+  state.releases = rels.filter((r) => r.models);
   const ul = $("#releases");
-  const total = state.releases.reduce((a, r) => a + r.models, 0);
+  const total = rels.reduce((a, r) => a + r.models + r.mmf, 0);
   const by = (r) => state.creator === null && r.creator ? `<span class="by">${esc(r.creator)}</span>` : "";
   const li = (r) => {
-    const active = r.mmf ? state.source === "mmf" && state.mmfRelease === r.release : state.source !== "mmf" && state.release === r.release;
-    const tip = `${r.release}${r.creator ? ` by ${r.creator}` : ""}${r.mmf ? ` · on MyMiniFactory, not in your library (${r.mmf} item${r.mmf === 1 ? "" : "s"})` : ""}`;
-    return `<li data-r="${esc(r.release)}" data-mmf="${r.mmf ? 1 : ""}" class="${active ? "active" : ""}" title="${esc(tip)}">
-      <span class="name">${esc(r.release)}${r.mmf ? `<span class="mmf-tag">MMF</span>` : ""}${by(r)}</span><span class="muted">${r.mmf || r.models}</span></li>`;
+    const tip = `${r.release}${r.creator ? ` by ${r.creator}` : ""}${r.mmf ? ` · ${r.mmf} on MyMiniFactory` : ""}`;
+    return `<li data-r="${esc(r.release)}" class="${state.release === r.release ? "active" : ""}" title="${esc(tip)}">
+      <span class="name">${esc(r.release)}${by(r)}</span><span class="muted">${r.models + r.mmf}</span></li>`;
   };
-  ul.innerHTML = `<li data-r="" class="${state.release === null && state.source !== "mmf" ? "active" : ""}"><span class="name">All releases</span><span class="muted">${total}</span></li>` +
+  ul.innerHTML = `<li data-r="" class="${state.release === null ? "active" : ""}"><span class="name">All releases</span><span class="muted">${total}</span></li>` +
     rels.map(li).join("");
   $("#releaseList").innerHTML = state.releases.map((r) => `<option value="${esc(r.release)}">`).join("");
   sectionNow();
@@ -52,8 +52,7 @@ async function loadReleases() {
 
 $("#releases").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-r]"); if (!li) return;
-  if (li.dataset.mmf) Object.assign(state, { source: "mmf", mmfMissing: false, mmfRelease: li.dataset.r, release: null, tags: [] });
-  else Object.assign(state, { source: null, mmfRelease: null, release: li.dataset.r === "" ? null : li.dataset.r });
+  state.release = li.dataset.r === "" ? null : li.dataset.r;
   $("#sidebar").classList.remove("open");
   refresh();
 });
@@ -64,7 +63,7 @@ async function loadCreators() {
   const named = list.filter((c) => c.creator);
   const none = list.find((c) => !c.creator);
   $("#creatorOptions").innerHTML = named.map((c) => `<option value="${esc(c.creator)}">`).join("");
-  // Creators only on MyMiniFactory are listed too; picking one shows their MyMiniFactory items.
+  // Creators only on MyMiniFactory are listed too.
   const li = (c, label, cls = "") => {
     const n = c.releases || c.mmf;
     const tip = [label, c.releases && `${c.releases} release${c.releases === 1 ? "" : "s"}`,
@@ -84,9 +83,6 @@ $("#creators").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-c], li[data-all]"); if (!li) return;
   state.creator = li.hasAttribute("data-all") ? null : li.dataset.c;
   state.release = null;
-  state.mmfRelease = null;
-  // The MyMiniFactory view stays on and filters by creator; a creator with nothing local opens it.
-  if (state.source !== "mmf" && state.creator !== null && !li.dataset.local) Object.assign(state, { source: "mmf", mmfMissing: false });
   $("#sidebar").classList.remove("open");
   refresh();
 });
@@ -99,6 +95,7 @@ function thumb(m) {
 }
 
 function card(m) {
+  if (m.mmf) return mmfCard(m);
   const b = [];
   if (m.supported_files) b.push(`<span class="badge sup">supported</span>`);
   if (m.unsupported_files) b.push(`<span class="badge unsup">unsupported</span>`);
@@ -116,15 +113,16 @@ function card(m) {
 
 async function loadModels(append = false) {
   if (!append) state.offset = 0;
-  if (state.source === "mmf") return loadMmf(append);
-  if (!append) loadMmfStrip();
   const p = new URLSearchParams({ q: state.q, offset: state.offset, limit: PAGE });
+  if (state.source) p.set("source", state.source);
   if (state.release !== null) p.set("release", state.release);
   if (state.sup) p.set("supported", state.sup);
   if (state.tags.length) p.set("tags", state.tags.join(","));
   if (state.creator !== null) p.set("creator", state.creator);
   if (!append) loadReleaseImages();
+  const ask = (state.modelsAsk = (state.modelsAsk || 0) + 1);
   const res = await api(`/api/models?${p}`);
+  if (ask !== state.modelsAsk) return;  // a newer filter was picked meanwhile
   state.total = res.total;
   state.items = append ? state.items.concat(res.items) : res.items;
   const grid = $("#grid");
@@ -132,18 +130,23 @@ async function loadModels(append = false) {
   $("#more").classList.toggle("hidden", state.items.length >= state.total);
   const rel = state.releases.find((r) => r.release === state.release);
   const who = (state.release !== null ? rel?.creator : state.creator) || (state.creator === "" ? "No creator" : "");
-  $("#crumbs").textContent = [who, state.release ?? "All releases"].filter(Boolean).join(" / ") + ` · ${state.total} models`;
-  $("#releaseCreatorBtn").classList.toggle("hidden", state.release === null && state.creator !== "");
+  const src = { mmf: "MyMiniFactory", missing: "Not in your library", local: "Without MyMiniFactory" }[state.source];
+  $("#crumbs").textContent = [src, who, state.release ?? "All releases"].filter(Boolean).join(" / ") + ` · ${state.total} models`;
+  // A release only on MyMiniFactory has nothing in the library to set a creator or tags on.
+  const onlyMmf = state.release !== null && !rel;
+  $("#releaseCreatorBtn").classList.toggle("hidden", onlyMmf || state.release === null && state.creator !== "");
   $("#releaseCreatorBtn").textContent = state.release === null ? "Set creator for several" : "Set creator";
   $("#renameCreatorBtn").classList.toggle("hidden", !state.creator || state.release !== null);
   $("#activeTags").innerHTML = state.tags.map((t) => `<span class="badge tag on" data-tag="${esc(t)}" title="Remove filter">${esc(t)} ✕</span>`).join("");
-  $("#releaseTagBtn").classList.toggle("hidden", state.release === null);
-  $("#combineBtn").classList.toggle("hidden", state.total < 2 || !!state.picked);
-  $("#modelList").innerHTML = [...new Set(state.items.map((m) => m.model))].map((m) => `<option value="${esc(m)}">`).join("");
+  $("#releaseTagBtn").classList.toggle("hidden", onlyMmf || state.release === null);
+  $("#combineBtn").classList.toggle("hidden", state.items.filter((m) => !m.mmf).length < 2 || !!state.picked);
+  $("#modelList").innerHTML = [...new Set(state.items.filter((m) => !m.mmf).map((m) => m.model))].map((m) => `<option value="${esc(m)}">`).join("");
   const empty = $("#empty");
   if (!state.total) {
     const st = await api("/api/status");
-    empty.innerHTML = st.files ? "No models match." :
+    empty.innerHTML = state.source === "mmf" || state.source === "missing"
+      ? (state.mmf?.total ? "Nothing on MyMiniFactory matches." : "Your MyMiniFactory library hasn't been synced yet. Click <b>Sync</b> next to MyMiniFactory in the sidebar.")
+      : st.files ? "No models match." :
       `Your library is empty.<br><br>Click <b>Import files</b>, or drop model files, folders or .zip / .7z archives anywhere on this page.`;
     empty.classList.remove("hidden");
   } else empty.classList.add("hidden");
@@ -152,7 +155,8 @@ async function loadModels(append = false) {
 async function loadReleaseImages() {
   const el = $("#releaseImages");
   const release = state.release;
-  const imgs = release === null ? [] : await api(`/api/releases/images?release=${encodeURIComponent(release)}`);
+  const local = release !== null && state.releases.some((r) => r.release === release);
+  const imgs = !local ? [] : await api(`/api/releases/images?release=${encodeURIComponent(release)}`);
   if (release !== state.release) return;
   state.releaseImages = imgs;
   el.innerHTML = `<div class="side-title">Release images</div><div class="strip">` + imgs.map((i) => `<button class="rimg ${i.main ? "main" : ""}" data-pic="${i.id}" title="${esc(i.path)}">
@@ -177,7 +181,7 @@ async function openPicture(pic) {
   $("#lbMainModel").classList.toggle("on", !!(fromModel && pic.main_model));
   $("#lbMainRelease").classList.toggle("on", !!(pic.main_release || pic.main));
   $("#lightbox").showModal();
-  const res = await api(`/api/models?${new URLSearchParams({ release: pic.release, limit: 1000 })}`);
+  const res = await api(`/api/models?${new URLSearchParams({ release: pic.release, limit: 1000, source: "local" })}`);
   if (state.picture !== pic) return;
   sel.innerHTML += res.items.map((m) => `<option value="${esc(m.id)}">${esc(m.model)}</option>`).join("");
   sel.value = pic.scope === "model" ? pic.model_id : "";
@@ -215,7 +219,7 @@ $("#more").onclick = () => { state.offset += PAGE; loadModels(true); };
 $("#grid").addEventListener("click", (e) => {
   if (e.target.closest("a")) return;
   const c = e.target.closest(".card"); if (!c) return;
-  if (c.dataset.mmf) { openMmfItem(state.items.find((m) => String(m.id) === c.dataset.mmf)); return; }
+  if (c.dataset.mmf) { openMmfItem(state.items.find((m) => m.mmf && String(m.id) === c.dataset.mmf)); return; }
   if (!state.picked) { openModel(c.dataset.id); return; }
   const m = state.items.find((x) => x.id === c.dataset.id);
   if (state.picked.has(m.id)) state.picked.delete(m.id); else state.picked.set(m.id, m);
@@ -232,7 +236,7 @@ function endPicking() {
   $("#grid").classList.remove("selecting");
   $("#selectBar").classList.add("hidden");
   document.querySelectorAll("#grid .card.picked").forEach((c) => c.classList.remove("picked"));
-  $("#combineBtn").classList.toggle("hidden", state.total < 2);
+  $("#combineBtn").classList.toggle("hidden", state.items.filter((m) => !m.mmf).length < 2);
 }
 const pickedReleases = () => new Set([...state.picked.values()].map((m) => m.release));
 function showPicked() {
@@ -251,8 +255,8 @@ $("#combineBtn").onclick = () => {
 };
 $("#selectCancel").onclick = endPicking;
 $("#selectAll").onclick = () => {
-  state.items.forEach((m) => state.picked.set(m.id, m));
-  document.querySelectorAll("#grid .card").forEach((c) => c.classList.add("picked"));
+  state.items.filter((m) => !m.mmf).forEach((m) => state.picked.set(m.id, m));
+  document.querySelectorAll("#grid .card:not(.mmf)").forEach((c) => c.classList.add("picked"));
   showPicked();
 };
 $("#combineGo").onclick = () => {
@@ -316,21 +320,20 @@ const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe", g
 async function loadMmfSide() {
   const s = await api("/api/mmf/status");
   state.mmf = s;
-  const li = (missing, label, n) => `<li data-mmf-missing="${missing ? 1 : ""}" class="${state.source === "mmf" && state.mmfRelease === null && state.mmfMissing === missing ? "active" : ""}">
-      <span class="name">${label}</span><span class="muted">${n}</span></li>`;
+  const li = (src, label, n) => `<li data-src="${src}" class="${state.source === src ? "active" : ""}">
+      <span class="name">${label}</span><span class="muted">${n ?? ""}</span></li>`;
   $("#mmfList").innerHTML = s.total
-    ? li(false, "All items", s.total) + li(true, "Not in your library", s.missing)
+    ? li("mmf", "Only MyMiniFactory", s.total) + li("missing", "Not in your library", s.missing) + li("local", "Hide MyMiniFactory")
     : `<li class="muted small" style="cursor:default"><span>Click <b>Sync</b> to list your MyMiniFactory library here.</span></li>`;
 }
+// MyMiniFactory items are in the grid with everything else; these filter them (click again to undo).
 $("#mmfList").addEventListener("click", (e) => {
-  const li = e.target.closest("li[data-mmf-missing]"); if (!li) return;
-  showMmf(!!li.dataset.mmfMissing);
-});
-function showMmf(missing) {
-  Object.assign(state, { source: "mmf", mmfMissing: missing, mmfRelease: null, release: null, tags: [] });
+  const li = e.target.closest("li[data-src]"); if (!li) return;
+  state.source = state.source === li.dataset.src ? "" : li.dataset.src;
+  if (state.source && state.source !== "local") state.tags = [];
   $("#sidebar").classList.remove("open");
   refresh();
-}
+});
 
 function mmfCard(m) {
   const b = [m.local ? `<span class="badge sup">in your library</span>` : m.queued ? `<span class="badge tag">waiting to download</span>` : `<span class="badge unsup">not downloaded</span>`];
@@ -338,61 +341,15 @@ function mmfCard(m) {
   const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))].join(", ");
   const img = m.image ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(m.image)}" alt="${esc(m.name)}" class="photo"
       onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">` : `<div class="ph">No preview</div>`;
-  return `<div class="card mmf" data-mmf="${m.id}" title="${esc(m.local ? `In your library: ${m.local.release}` : "Open on MyMiniFactory")}">
+  const sub = [state.release === null && m.grid_release, m.creator].filter(Boolean).join(" · ") || "MyMiniFactory";
+  return `<div class="card mmf" data-mmf="${m.id}" title="${esc(m.local ? `In your library: ${m.local.release}` : `On MyMiniFactory${where ? `: ${where}` : ""}`)}">
     <div class="thumb">${img}</div>
     <div class="meta">
       <div class="title" title="${esc(m.name)}">${esc(m.name)}</div>
-      <div class="sub" title="${esc(where)}">${esc([m.creator, where].filter(Boolean).join(" · ") || "MyMiniFactory")}</div>
+      <div class="sub" title="${esc(sub)}">${esc(sub)}</div>
       <div class="badges">${b.join("")}<a class="badge link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">MyMiniFactory ↗</a></div>
     </div></div>`;
 }
-
-async function loadMmf(append) {
-  const p = new URLSearchParams({ q: state.q, offset: state.offset, limit: PAGE });
-  if (state.mmfMissing) p.set("missing", "true");
-  if (state.creator !== null) p.set("creator", state.creator);
-  if (state.mmfRelease !== null) p.set("release", state.mmfRelease);
-  const res = await api(`/api/mmf?${p}`);
-  if (state.source !== "mmf") return;
-  state.total = res.total;
-  state.items = append ? state.items.concat(res.items) : res.items;
-  $("#grid").innerHTML = state.items.map(mmfCard).join("");
-  $("#more").classList.toggle("hidden", state.items.length >= state.total);
-  const who = state.creator === null ? "" : `${state.creator || "No creator"} / `;
-  const what = state.mmfRelease !== null ? `${state.mmfRelease} (not in your library)` : state.mmfMissing ? "Not in your library" : "All items";
-  $("#crumbs").textContent = `MyMiniFactory / ${who}${what} · ${state.total} items`;
-  if (state.picked) endPicking();
-  for (const id of ["#releaseCreatorBtn", "#releaseTagBtn", "#releaseImages", "#mmfStrip", "#combineBtn"]) $(id).classList.add("hidden");
-  $("#renameCreatorBtn").classList.toggle("hidden", !state.creator);
-  $("#activeTags").innerHTML = "";
-  const empty = $("#empty");
-  empty.innerHTML = state.mmf?.total ? "Nothing on MyMiniFactory matches." : "Your MyMiniFactory library hasn't been synced yet. Click <b>Sync</b> next to MyMiniFactory in the sidebar.";
-  empty.classList.toggle("hidden", !!state.total);
-}
-
-// Local results come first; matching MyMiniFactory items (by the search, or by the picked
-// creator) are summed up above them.
-async function loadMmfStrip() {
-  const el = $("#mmfStrip");
-  const q = state.q, creator = state.creator;
-  if ((!q && !creator) || !state.mmf?.total) { el.classList.add("hidden"); return; }
-  const p = new URLSearchParams({ q, limit: 8 });
-  if (creator) p.set("creator", creator);
-  const res = await api(`/api/mmf?${p}`);
-  if (q !== state.q || creator !== state.creator || state.source === "mmf") return;
-  el.innerHTML = `<div class="side-title">On MyMiniFactory · ${res.total} ${q ? `match${res.total === 1 ? "" : "es"}` : `item${res.total === 1 ? "" : "s"}`}
-      <button class="link" id="mmfStripAll">Show all</button></div>
-    <div class="strip">${res.items.map((m) => `<button class="mmf-chip" data-mmf-item="${m.id}" title="${esc(m.name)}${m.local ? " · in your library" : " · not downloaded"}">
-      ${m.image ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(m.image)}" alt="" onerror="this.remove()">` : ""}
-      <span>${esc(m.name)}</span>${m.local ? "" : `<span class="badge unsup">not downloaded</span>`}</button>`).join("")}</div>`;
-  el.items = res.items;
-  el.classList.toggle("hidden", !res.total);
-}
-$("#mmfStrip").addEventListener("click", (e) => {
-  if (e.target.closest("#mmfStripAll")) { showMmf(false); return; }
-  const b = e.target.closest("[data-mmf-item]");
-  if (b) openMmfItem($("#mmfStrip").items.find((m) => String(m.id) === b.dataset.mmfItem));
-});
 
 function openMmfItem(m) { if (m) openMmfModel(m.id); }
 
@@ -492,7 +449,7 @@ $("#mmfFile").onchange = async (e) => {
 $("#mmfClear").onclick = async () => {
   if (!confirm("Remove the MyMiniFactory list from Resin Models? Your files aren't touched, and you can sync again any time.")) return;
   await api("/api/mmf", { method: "DELETE" });
-  if (state.source === "mmf") state.source = null;
+  state.source = "";
   await refresh();
   renderMmfInfo();
 };
@@ -513,7 +470,7 @@ async function loadTags() {
 function toggleTag(tag) {
   const i = state.tags.findIndex((x) => x.toLowerCase() === tag.toLowerCase());
   if (i >= 0) state.tags.splice(i, 1); else state.tags.push(tag);
-  state.source = null;
+  if (state.source !== "local") state.source = "";  // only models in the library have tags
   refresh();
 }
 $("#tagList").addEventListener("click", (e) => { const li = e.target.closest("[data-tag]"); if (li) { $("#sidebar").classList.remove("open"); toggleTag(li.dataset.tag); } });
@@ -564,7 +521,7 @@ $("#releaseTagDlg").addEventListener("close", async () => {
 
 async function openCreators(releases, preset = "", onlyWithout = false) {
   const dlg = $("#creatorDlg"), form = $("form", dlg);
-  const all = await api(onlyWithout ? "/api/releases?creator=" : "/api/releases");
+  const all = await api(onlyWithout ? "/api/releases?creator=&source=local" : "/api/releases?source=local");
   form.reset();
   form.creator.value = preset;
   const checked = new Set(releases);
@@ -700,8 +657,8 @@ document.querySelectorAll("#creators, #releases, #tagList").forEach((ul) => ul.a
 function sectionNow() {
   const set = (sec, text) => { const el = $(`.side-title[data-sec="${sec}"] .sec-now`); if (el) el.textContent = text ? `· ${text}` : ""; };
   set("creators", state.creator === null ? "" : state.creator || "No creator");
-  set("releases", state.source === "mmf" ? state.mmfRelease || "" : state.release || "");
-  set("mmf", state.source === "mmf" && state.mmfRelease === null ? (state.mmfMissing ? "Not in your library" : "All items") : "");
+  set("releases", state.release || "");
+  set("mmf", { mmf: "Only MyMiniFactory", missing: "Not in your library", local: "Hidden" }[state.source] || "");
   set("tags", state.tags.join(", "));
 }
 

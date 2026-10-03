@@ -184,6 +184,21 @@ with sync_playwright() as p:
     assert set(online) == {"Ancient Wyrm", "Kickstarter: Castle Siege", "Javascript", "Greenskin Tribe"}, online
     assert online["Greenskin Tribe"]["creator"] == "MiniForge" and online["Greenskin Tribe"]["models"] == 0
     assert [i["id"] for i in get("/api/mmf?release=greenskin%20tribe")["items"]] == [6], "matched Goblin Boss left out"
+    # The grid mixes in the items not in the library like models; the source filter picks either side.
+    local_total = get("/api/models?source=local")["total"]
+    grid = get("/api/models?limit=1000")
+    assert grid["total"] == local_total + 4 and sorted(m["id"] for m in grid["items"] if m.get("mmf")) == [2, 3, 4, 6], grid["total"]
+    keys = [(m.get("grid_release") or m["release"]).casefold() for m in grid["items"]]
+    assert keys == sorted(keys), "sorted by release with the local models"
+    assert [m["id"] for m in get("/api/models?limit=2&offset=0")["items"]] + [m["id"] for m in get("/api/models?limit=1000&offset=2")["items"]] == \
+        [m["id"] for m in grid["items"]], "paging"
+    assert [m["id"] for m in get("/api/models?release=Greenskin%20Tribe")["items"]] == [6]
+    assert get("/api/models?source=missing")["total"] == 4 and get("/api/models?source=mmf")["total"] == 6
+    assert not any(m.get("mmf") for m in get("/api/models?source=local&limit=1000")["items"])
+    assert {m["id"] for m in get("/api/models?q=goblin")["items"] if m.get("mmf")} == {6}
+    assert not any(m.get("mmf") for m in get("/api/models?tags=fantasy")["items"]), "only library models have tags"
+    assert all(r["models"] for r in get("/api/releases?source=local"))
+    assert {r["release"] for r in get("/api/releases?source=missing")} == set(online)
 
     # Renaming a creator covers its releases and MyMiniFactory items, and survives re-indexing.
     assert post("/api/creators/rename", {"creator": "Mini Forge", "name": "The Mini Forge Co"})["creator"] == "The Mini Forge Co"
@@ -207,8 +222,8 @@ with sync_playwright() as p:
     app.reload()
     app.fill(".side-filter input[data-for='releases']", "castle siege")  # long lists show the first few
     app.click("#releases li[data-r='Kickstarter: Castle Siege']")
-    app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
-    assert app.locator("#grid .card.mmf").count() == 1
+    app.wait_for_function("document.getElementById('crumbs').textContent.includes('Castle Siege')")
+    assert app.locator("#grid .card").count() == 1 and app.locator("#grid .card.mmf[data-mmf='4']").count() == 1
     app.click(".side-title[data-sec='releases']")  # sections fold, and stay folded after a reload
     assert app.locator("#releases").is_hidden()
     app.reload()
@@ -230,14 +245,20 @@ with sync_playwright() as p:
     app.fill(".side-filter input[data-for='releases']", "kickstarter")
     assert app.locator("#releases > li[data-r]:not(.cut):not([data-r=''])").count() == 1
     app.fill(".side-filter input[data-for='releases']", "")
-    app.click("#creators li[data-c='Castle_Works!']")  # only on MyMiniFactory: opens its items there
+    app.click("#creators li[data-c='Castle_Works!']")  # only on MyMiniFactory: its item is in the grid
+    app.wait_for_function("(t) => document.getElementById('crumbs').textContent.includes(t)", arg='Castle_Works!')
     app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
-    assert app.locator("#grid .card.mmf").count() == 1
-    app.click("#creators li[data-c='Mini Forge']")  # the MyMiniFactory view stays, now by Mini Forge
-    app.wait_for_selector("#grid .card.mmf[data-mmf='5']")
-    assert app.locator("#grid .card.mmf").count() == 2
+    assert app.locator("#grid .card").count() == 1
+    app.click("#creators li[data-c='Mini Forge']")  # local models and the item not in the library
+    app.wait_for_function("(t) => document.getElementById('crumbs').textContent.includes(t)", arg='Mini Forge /')
+    app.wait_for_selector("#grid .card.mmf[data-mmf='6']")
+    assert app.locator("#grid .card.mmf").count() == 1 and app.locator("#grid .card:not(.mmf)").count() >= 1
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-creator.png")
+    app.click("#mmfList li[data-src='mmf']")  # only MyMiniFactory, the ones in the library too
+    app.wait_for_function("(t) => document.getElementById('crumbs').textContent.includes(t)", arg='MyMiniFactory / Mini Forge')
+    app.wait_for_selector("#grid .card.mmf[data-mmf='5']")
+    assert app.locator("#grid .card.mmf").count() == 2 and app.locator("#grid .card:not(.mmf)").count() == 0
     # The model window asks for the 720px version of a small picture, and keeps the small one without it.
     for oid, want in (("5", "/720X720-boss.png"), ("6", "/230X230-shaman.png")):
         app.click(f"#grid .card.mmf[data-mmf='{oid}']")
@@ -245,26 +266,26 @@ with sync_playwright() as p:
         app.wait_for_function("(w) => document.getElementById('mPreview').src.endsWith(w) && "
                               "document.getElementById('mPreview').naturalWidth > 0", arg=want)
         app.keyboard.press("Escape")
-    app.click("#releases li[data-r='']")  # back to the local library, still by Mini Forge
-    app.wait_for_selector("#mmfStrip:not(.hidden) .mmf-chip")
-    assert app.locator("#mmfStrip .mmf-chip").count() == 2
-    if SHOTS:
-        app.screenshot(path=f"{SHOTS}/mmf-creator-local.png")
+    app.click("#mmfList li[data-src='mmf']")  # clicking it again shows everything
+    app.wait_for_selector("#grid .card:not(.mmf)")
     app.click("#creators li[data-all]")
 
-    # Search shows MyMiniFactory matches above the local results.
+    # Search finds MyMiniFactory items among the local results; no separate strip.
     app.reload()
     app.fill("#search", "goblin")
-    app.wait_for_selector("#mmfStrip:not(.hidden) .mmf-chip")
-    assert app.locator("#mmfStrip .mmf-chip").count() == 2
-    app.wait_for_function("[...document.querySelectorAll('#mmfStrip img')].every((i) => i.complete && i.naturalWidth)")
+    app.wait_for_function("document.querySelectorAll('#grid .card.mmf').length === 1")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='6']")
+    assert app.locator("#grid .card.mmf").count() == 1 and app.locator("#grid .card:not(.mmf)").count() >= 1
+    assert app.locator("#mmfStrip").count() == 0
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-search.png")
     app.fill("#search", "")
-    app.wait_for_selector("#mmfStrip.hidden", state="attached")
-    app.click("#mmfList li[data-mmf-missing='1']")
-    app.wait_for_selector("#grid .card.mmf")
-    assert app.locator("#grid .card.mmf").count() == 4
+    app.click("#mmfList li[data-src='local']")  # hide MyMiniFactory
+    app.wait_for_function("!document.querySelector('#grid .card.mmf') && document.querySelector('#grid .card')")
+    app.click("#mmfList li[data-src='missing']")
+    app.wait_for_function("(t) => document.getElementById('crumbs').textContent.includes(t)", arg='Not in your library')
+    app.wait_for_function("document.querySelectorAll('#grid .card.mmf').length === 4")
+    assert app.locator("#grid .card:not(.mmf)").count() == 0
     app.wait_for_function("[...document.querySelectorAll('#grid img')].every((i) => i.complete && i.naturalWidth)")
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-grid.png")
