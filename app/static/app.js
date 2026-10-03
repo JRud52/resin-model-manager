@@ -47,6 +47,7 @@ async function loadReleases() {
     rels.map(li).join("");
   $("#releaseList").innerHTML = state.releases.map((r) => `<option value="${esc(r.release)}">`).join("");
   sectionNow();
+  trimList("releases");
 }
 
 $("#releases").addEventListener("click", (e) => {
@@ -76,6 +77,7 @@ async function loadCreators() {
     (none ? li(none, "No creator", "muted") : "") +
     named.map((c) => li(c, c.creator)).join("") +
     (named.length ? "" : `<li class="muted small" style="cursor:default">Set a creator from a release, or when importing.</li>`);
+  trimList("creators");
 }
 
 $("#creators").addEventListener("click", (e) => {
@@ -506,6 +508,7 @@ async function loadTags() {
   $("#tagList").innerHTML = tags.length
     ? tags.map((t) => `<li class="badge tag ${state.tags.some((x) => x.toLowerCase() === t.tag.toLowerCase()) ? "on" : ""}" data-tag="${esc(t.tag)}">${esc(t.tag)} <span class="muted">${t.models}</span></li>`).join("")
     : `<li class="muted small" style="padding:0 8px">Add tags from a model's page.</li>`;
+  trimList("tagList");
 }
 
 function toggleTag(tag) {
@@ -639,6 +642,41 @@ $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
     });
   });
 })();
+// Long sidebar lists show their first SIDE_SHOWN entries, plus the "All …" rows and whatever is
+// picked, until "Show all" is clicked (remembered in this browser) or the filter box is used.
+const SIDE_SHOWN = 8;
+let sideAll = [];
+try { sideAll = JSON.parse(localStorage.getItem("sideAll") || "[]"); } catch {}
+function trimList(id) {
+  const ul = $(`#${id}`), input = $(`.side-filter input[data-for="${id}"]`);
+  ul.querySelector(".show-more")?.remove();
+  const rows = [...ul.querySelectorAll(":scope > li[data-c], :scope > li[data-r], :scope > li[data-tag]")]
+    .filter((li) => !li.hasAttribute("data-all") && li.dataset.r !== "" && li.dataset.c !== "");
+  input.closest(".side-filter").classList.toggle("hidden", rows.length <= SIDE_SHOWN && !input.value);
+  const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = words.length || sideAll.includes(id);
+  let shown = 0, hidden = 0;
+  for (const li of rows) {
+    const text = li.textContent.toLowerCase();
+    const match = words.every((w) => text.includes(w));
+    const keep = match && (all || shown < SIDE_SHOWN || li.matches(".active, .on"));
+    li.classList.toggle("cut", !keep);
+    if (keep) shown++; else if (match) hidden++;
+  }
+  if (hidden || (sideAll.includes(id) && rows.length > SIDE_SHOWN && !words.length)) {
+    const more = hidden ? `Show all ${rows.length}…` : "Show fewer";
+    ul.insertAdjacentHTML("beforeend", `<li class="show-more" data-more="${hidden ? 1 : ""}"><span class="name">${more}</span></li>`);
+  } else if (words.length && !shown) ul.insertAdjacentHTML("beforeend", `<li class="show-more muted" style="cursor:default"><span class="name">No matches</span></li>`);
+}
+document.querySelectorAll(".side-filter input").forEach((input) => input.addEventListener("input", () => trimList(input.dataset.for)));
+document.querySelectorAll("#creators, #releases, #tagList").forEach((ul) => ul.addEventListener("click", (e) => {
+  const more = e.target.closest(".show-more[data-more]"); if (!more) return;
+  e.stopImmediatePropagation();
+  sideAll = more.dataset.more ? [...new Set([...sideAll, ul.id])] : sideAll.filter((x) => x !== ul.id);
+  try { localStorage.setItem("sideAll", JSON.stringify(sideAll)); } catch {}
+  trimList(ul.id);
+}, true));
+
 function sectionNow() {
   const set = (sec, text) => { const el = $(`.side-title[data-sec="${sec}"] .sec-now`); if (el) el.textContent = text ? `· ${text}` : ""; };
   set("creators", state.creator === null ? "" : state.creator || "No creator");
