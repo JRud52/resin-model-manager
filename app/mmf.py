@@ -181,9 +181,12 @@ class _Index:
         self.entries = []  # (tokens, creator tokens, creator key, release, model_id or None)
         self.by_word: dict[str, list[int]] = {}
         seen_releases = set()
+        # Creators renamed in the app count as one ("Lord of the Print" shown as "Rescale Miniatures").
+        self.names = creator_names()
         for r in db.conn().execute("SELECT release, model, MAX(creator) creator, MIN(model_id) model_id "
                                    "FROM files WHERE hidden=0 GROUP BY release, model"):
-            creator, ckey = _tokens(r["creator"] or ""), creator_key(r["creator"] or "")
+            creator = _tokens(r["creator"] or "")
+            ckey = creator_key(display_creator(r["creator"] or "", self.names))
             if r["release"] not in seen_releases:
                 seen_releases.add(r["release"])
                 self._add(_tokens(r["release"]) - creator or _tokens(r["release"]), creator, ckey, r["release"], None)
@@ -198,7 +201,7 @@ class _Index:
             self.by_word.setdefault(w, []).append(i)
 
     def match(self, name: str, creator: str = ""):
-        ctoks, ckey = _tokens(creator), creator_key(creator)
+        ctoks, ckey = _tokens(creator), creator_key(display_creator(creator, self.names))
         toks = _tokens(name)
         toks = toks - ctoks or toks
         if not toks:
@@ -237,7 +240,7 @@ def _local_index() -> _Index:
     global _index_cache
     sig = tuple(db.conn().execute(
         "SELECT COUNT(*), MAX(id), TOTAL(length(release) + length(model) + length(creator) + hidden) FROM files"
-    ).fetchone())
+    ).fetchone()) + (tuple(sorted(creator_names().items())),)
     if _index_cache[0] != sig:
         _index_cache = (sig, _Index())
     return _index_cache[1]

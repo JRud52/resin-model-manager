@@ -24,6 +24,7 @@ LOCAL = [  # creator, release, model
     ("DM Stash", "Elf Wizard", "Elf Wizard"),
     ("Bite The Bullet", "BTB 39 23-09 Explorers Fellowship", "Ranger"),
     ("Lord of the Print", "Welcome Pack", "Goblins"),
+    ("Lord of the Print", "Welcome Pack", "602ab09167439 angel-fighter"),
     ("Titan Forge", "Rogues", "Halfling Male Rogue"),
     ("Titan Forge", "Armoury", "Weapon"),
     ("", "Lich_King_Presupported", "Lich King"),
@@ -64,4 +65,10 @@ for title, creator, want in CASES:
     bad += got_release != want
     print(f"{flag} {title!r} by {creator or '-'} -> {got_release!r}")
 assert not bad, f"{bad} wrong matches"
+
+# A creator renamed in the app is one creator: Lord of the Print now goes by Rescale Miniatures.
+assert not index.match("Angel Fighter", "Rescale Miniatures")
+mmf.rename_creator("Lord of the Print", "Rescale Miniatures")
+got = mmf._local_index().match("Angel Fighter", "Rescale Miniatures")
+assert got and got["release"] == "Welcome Pack", got
 print("MATCH OK")
