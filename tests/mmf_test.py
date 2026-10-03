@@ -27,7 +27,7 @@ PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM
 PLEDGES = [obj(4, "Siege Tower", creator="Castle_Works!", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
 # "Mini Forge" here. The shaman's display name is on its designer, its user_name is the account slug.
 def small(name):  # the library's own small picture link
-    return {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/object-assets/gb/images/230X230-{name}.png"}}]}
+    return {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/object-images/gb/images/230X230-{name}.png"}}]}
 
 
 TRIBE = [obj(5, "Goblin Boss", creator="MiniForge", images=small("boss")),
@@ -68,18 +68,14 @@ def fake_mmf(route):
                          "groups": {"items": [{"id": "all/9", "name": "All"}, {"id": "42", "name": "March"}]}}], page)
     elif "/data-library/group/42" in url:
         body = page_of(TRIBE, page)
-    elif url.endswith("/object/3d-print-2"):  # the item's page: its own images, other people's prints, other items
-        a, other = f"{CDN}/object-assets/aa2/images", f"{CDN}/object-assets/bb9/images"
-        own = [{"is_primary": n == "a", "thumbnail": {"url": f"{a}/230X230-wyrm-{n}.png"},
-                "large": {"url": f"{a}/720X720-wyrm-{n}.png"}} for n in "abcd"]
-        data = {"object": {"id": 2, "images": own},
-                "makes": [{"user": "someone", "image": f"{CDN}/object-assets/mk7/images/my-print.png",
-                           "images": [{"url": f"{CDN}/object-assets/mk7/images/720X720-my-print.png"}]}],
-                "related": [{"id": 9, "images": [{"is_primary": True, "large": {"url": f"{other}/720X720-other.png"}}]}]}
-        return route.fulfill(status=200, content_type="text/html", body=f"""<html><head>
-            <meta property="og:image" content="{a}/720X720-wyrm-a.png"></head><body>
-            <img src="{CDN}/object-assets/mk7/images/230X230-my-print.png">
-            <script>self.__next_f.push([1, {json.dumps(json.dumps(data))}])</script></body></html>""")
+    elif url.endswith("/api/v2/objects/2"):  # MyMiniFactory's own data for the item: just the listing's images
+        a = f"{CDN}/object-images/aa2/images"
+        return route.fulfill(status=200, content_type="application/json", body=json.dumps({"id": 2, "images": [
+            {"is_primary": n == "a", "thumbnail": {"url": f"{a}/230X230-wyrm-{n}.png"},
+             "standard": {"url": f"{a}/720X720-wyrm-{n}.png"}, "large": {"url": f"{a}/1000X1000-wyrm-{n}.png"}}
+            for n in "abcd"]}))
+    elif "/api/v2/objects/" in url:
+        return route.fulfill(status=404, body="{}")
     elif url.endswith("/download/2"):
         return route.fulfill(status=200, content_type="application/zip", body=wyrm_zip(),
                              headers={"Content-Disposition": 'attachment; filename="Ancient_Wyrm.zip"'})
@@ -235,7 +231,7 @@ with sync_playwright() as p:
     app.wait_for_selector("#modelDlg.mmf-mode[open]")
     wyrm_images = get("/api/mmf/2")["images"]
     assert [u.rsplit("/", 1)[1] for u in wyrm_images] == [
-        "720X720-wyrm-a.png", "720X720-wyrm-b.png", "720X720-wyrm-c.png", "720X720-wyrm-d.png"], wyrm_images
+        "1000X1000-wyrm-a.png", "1000X1000-wyrm-b.png", "1000X1000-wyrm-c.png", "1000X1000-wyrm-d.png"], wyrm_images
     assert get("/api/mmf/1")["images"] == [f"{CDN}/1.png"], "pages without images keep the library picture"
     assert app.locator("#mFiles [data-mmf-pic]").count() == 4
     assert app.locator("#mEditBtn").is_hidden() and app.locator("#mMapBtn").is_hidden()

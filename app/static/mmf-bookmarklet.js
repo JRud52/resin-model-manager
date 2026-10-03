@@ -120,45 +120,18 @@
     });
     return out;
   }
-  // The library lists only a small picture per item; its own page has every image in full size.
-  // The page also shows other people's prints and other items, so only the item's own image
-  // list is used: the objects with an "is_primary" flag (the format the library itself uses),
-  // from the image folder the item's library picture or the page's og:image is in.
-  // Image links look like https://dl.myminifactory.com/object-assets/<folder>/images/720X720-name.jpg.
-  function folderOf(u) { var m = /\/object-assets\/([^\/]+)\//.exec(u || ""); return m && m[1]; }
-  function enclosing(text, pos) {  // the {...} around pos, parsed, or null
-    for (var a = pos, depth = 0; a >= 0; a--) {
-      if (text[a] === "}") depth++;
-      else if (text[a] === "{" && !depth--) break;
-    }
-    for (var b = a, d = 0; a >= 0 && b < text.length; b++) {
-      if (text[b] === "{") d++;
-      else if (text[b] === "}" && !--d) {
-        try { return JSON.parse(text.slice(a, b + 1)); } catch (err) { return null; }
-      }
-    }
-    return null;
-  }
-  function bestUrl(img) {
-    var f = img.large || img.standard || img.original || img.thumbnail || {};
-    return typeof f === "string" ? f : f.url || img.url || "";
-  }
+  // The library lists only a small picture per item. MyMiniFactory's own object data
+  // (/api/v2/objects/{id}, read with the user's login) lists just the listing's images, in
+  // several sizes; the item page also shows other people's prints, so it isn't used.
   async function pageImages(it) {
-    if (!/^https:\/\/www\.myminifactory\.com\//.test(it.url)) return [];
-    var r = await fetch(it.url, { credentials: "include" });
+    var r = await fetch("/api/v2/objects/" + encodeURIComponent(it.id), {
+      credentials: "include", headers: { Accept: "application/json" } });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    var text = (await r.text()).replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\\"/g, '"').replace(/\\\//g, "/");
-    var og = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i.exec(text) ||
-      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i.exec(text);
-    var byFolder = {}, re = /"is_primary"\s*:/g, m;
-    while ((m = re.exec(text))) {
-      var img = enclosing(text, m.index), u = img && bestUrl(img), f = folderOf(u);
-      if (!f || !/^https:\/\//.test(u)) continue;
-      var list = byFolder[f] || (byFolder[f] = []);
-      if (list.indexOf(u) < 0) list.push(u);
-    }
-    var folder = [folderOf(it.image), folderOf(og && og[1])].filter(function (f) { return f && byFolder[f]; })[0];
-    return folder ? byFolder[folder] : [];  // not sure which images are the item's: keep the library picture
+    var o = await r.json();
+    return list(o.images && (o.images.items || o.images)).map(function (img) {
+      var f = img && (img.large || img.standard || img.original) || {};
+      return typeof f === "string" ? f : f.url;
+    }).filter(function (u) { return /^https:\/\//.test(u || ""); });
   }
   async function galleries(items) {
     var next = 0, done = 0, batch = [];

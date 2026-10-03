@@ -442,7 +442,7 @@ function renderMmfModel() {
 
 // MyMiniFactory image links carry their size (.../images/230X230-name.jpg); the large window
 // asks for the 720px version and falls back to the link as saved if there is none.
-const mmfLarge = (u) => u.replace(/(\/object-assets\/[^/]+\/images\/)\d{2,3}X\d{2,3}-/i, "$1720X720-");
+const mmfLarge = (u) => u.replace(/(\/object-(?:assets|images)\/[^/]+\/images\/)\d{2,3}X\d{2,3}-/i, "$1720X720-");
 function showMmfPicture(i) {
   state.mmfPic = i;
   const img = $("#mPreview"), url = state.mmfItem.images[i], large = mmfLarge(url);
