@@ -26,8 +26,12 @@ WYRM_PICS = {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/2.png"}}
 PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS, archive_download_url="/download/2"), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
 PLEDGES = [obj(4, "Siege Tower", creator="Castle_Works!", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
 # "Mini Forge" here. The shaman's display name is on its designer, its user_name is the account slug.
-TRIBE = [obj(5, "Goblin Boss", creator="MiniForge"),
-         obj(6, "Goblin Shaman", creator="mini-forge-1984", designer={"name": "MiniForge", "username": "mini-forge-1984"})]
+def small(name):  # the library's own small picture link
+    return {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/object-assets/gb/images/230X230-{name}.png"}}]}
+
+
+TRIBE = [obj(5, "Goblin Boss", creator="MiniForge", images=small("boss")),
+         obj(6, "Goblin Shaman", creator="mini-forge-1984", images=small("shaman"), designer={"name": "MiniForge", "username": "mini-forge-1984"})]
 
 def png(i):
     from io import BytesIO
@@ -101,7 +105,7 @@ with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
     ctx = browser.new_context(viewport={"width": 1280, "height": 860})
     ctx.route("https://www.myminifactory.com/**", fake_mmf)
-    ctx.route(f"{CDN}/**", lambda r: r.fulfill(
+    ctx.route(f"{CDN}/**", lambda r: r.fulfill(status=404, body="") if "720X720-shaman" in r.request.url else r.fulfill(
         status=200, content_type="image/png", body=png(sum(map(ord, r.request.url.rsplit("/", 1)[1])) % 7)))
     app = ctx.new_page()
     app.goto(BASE)
@@ -195,6 +199,13 @@ with sync_playwright() as p:
     assert app.locator("#grid .card.mmf").count() == 2
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-creator.png")
+    # The model window asks for the 720px version of a small picture, and keeps the small one without it.
+    for oid, want in (("5", "/720X720-boss.png"), ("6", "/230X230-shaman.png")):
+        app.click(f"#grid .card.mmf[data-mmf='{oid}']")
+        app.wait_for_selector("#modelDlg.mmf-mode[open]")
+        app.wait_for_function("(w) => document.getElementById('mPreview').src.endsWith(w) && "
+                              "document.getElementById('mPreview').naturalWidth > 0", arg=want)
+        app.keyboard.press("Escape")
     app.click("#releases li[data-r='']")  # back to the local library, still by Mini Forge
     app.wait_for_selector("#mmfStrip:not(.hidden) .mmf-chip")
     assert app.locator("#mmfStrip .mmf-chip").count() == 2

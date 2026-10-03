@@ -440,13 +440,19 @@ function renderMmfModel() {
   markMmfPic();
 }
 
+// MyMiniFactory image links carry their size (.../images/230X230-name.jpg); the large window
+// asks for the 720px version and falls back to the link as saved if there is none.
+const mmfLarge = (u) => u.replace(/(\/object-assets\/[^/]+\/images\/)\d{2,3}X\d{2,3}-/i, "$1720X720-");
 function showMmfPicture(i) {
   state.mmfPic = i;
-  const img = $("#mPreview");
+  const img = $("#mPreview"), url = state.mmfItem.images[i], large = mmfLarge(url);
   img.referrerPolicy = "no-referrer";
   img.style.visibility = "visible";
-  img.src = state.mmfItem.images[i];
-  img.onerror = () => { img.style.visibility = "hidden"; };
+  img.onerror = () => {
+    if (img.src === large && large !== url) img.src = url;
+    else img.style.visibility = "hidden";
+  };
+  img.src = large;
   $("#mPreviewName").textContent = `Image ${i + 1} of ${state.mmfItem.images.length}`;
   markMmfPic();
 }
