@@ -33,6 +33,8 @@
   document.body.appendChild(box);
   function say(text) { box.textContent = text; send({ type: "mmf-progress", text: text }); }
 
+  // Tag names or {name} objects as the site sends them; the app tidies them up.
+  function tagList(x) { return typeof x === "string" ? x.split(",") : list(x); }
   function list(x) {
     if (Array.isArray(x)) return x;
     return x && typeof x === "object" ? Object.keys(x).map(function (k) { return x[k]; }) : [];
@@ -82,7 +84,8 @@
       collection: collection || (pledge && pledge.name) || "",
       // Display name first ("The Print Goes Ever On"), the account slug only as a fallback.
       creator: (o.designer && o.designer.name) || o.user_name || o.username || (o.designer && o.designer.username) || "",
-      creator_url: o.user_url || "", url: o.absolute_url || o.url || o.show_url || "", image: picture(o)
+      creator_url: o.user_url || "", url: o.absolute_url || o.url || o.show_url || "", image: picture(o),
+      tags: tagList(o.tags)
     };
   }
 
@@ -250,7 +253,8 @@
         creator: creator.name || p.creatorName || creator.username || p.creatorUsername || "",
         creator_url: creator.username ? "https://www.myminifactory.com/users/" + encodeURIComponent(creator.username) : "",
         url: d.url ? "https://www.myminifactory.com/object/3d-print-" + d.url : "/object/" + p.originalId,
-        image: thumb || d.previewUrl || "", images: pics, downloads: []
+        image: thumb || d.previewUrl || "", images: pics, downloads: [],
+        tags: tagList(p.tags).length ? tagList(p.tags) : tagList(d.tags)
       });
     });
     Object.keys(KINDS).forEach(function (k) { complete.push(KINDS[k]); });

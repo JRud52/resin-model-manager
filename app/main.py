@@ -134,8 +134,8 @@ def releases(q: str = "", tags: str = "", creator: Optional[str] = None, source:
                              SUM(size) size FROM files WHERE {where} GROUP BY release ORDER BY release COLLATE NOCASE""",
                          args).fetchall()
         out = [{**dict(r), "mmf": 0} for r in rows]
-    if source != "local" and not tags.strip():  # tags are only on local models
-        online = mmf.releases(q, creator, source)
+    if source != "local":
+        online = mmf.releases(q, creator, source, [t for t in tags.split(",") if t.strip()])
         for r in out:
             hit = online.pop(r["release"].casefold(), None)
             r["mmf"] = hit["mmf"] if hit else 0
@@ -151,7 +151,16 @@ def release_images(release: str):
 
 
 def _filters(release: Optional[str], q: str, tags: list[str], creator: Optional[str] = None):
+    """SQL for files matching the filters. Tags include those of the MyMiniFactory items matched
+    to a model (mmf.local_tags)."""
     where, args = ["hidden=0"], []
+    online = mmf.local_tags() if q or tags else {}
+
+    def online_ids(test) -> str:
+        ids = [m for m, ts in online.items() if any(test(t.casefold()) for t in ts)]
+        args.extend(ids)
+        return f" OR model_id IN ({','.join('?' * len(ids))})" if ids else ""
+
     if release is not None:
         where.append("release = ?")
         args.append(release)
@@ -161,15 +170,18 @@ def _filters(release: Optional[str], q: str, tags: list[str], creator: Optional[
     if q:
         for word in q.split():
             if word.lower().startswith("tag:") and len(word) > 4:  # exact tag search
-                where.append("model_id IN (SELECT model_id FROM model_tags WHERE tag = ?)")
                 args.append(word[4:])
+                tag = word[4:].casefold()
+                where.append(f"(model_id IN (SELECT model_id FROM model_tags WHERE tag = ?){online_ids(lambda t: t == tag)})")
                 continue
-            where.append("(model LIKE ? OR release LIKE ? OR creator LIKE ? OR logical_path LIKE ? "
-                         "OR model_id IN (SELECT model_id FROM model_tags WHERE tag LIKE ?))")
             args += [f"%{word}%"] * 5
+            low = word.casefold()
+            where.append("(model LIKE ? OR release LIKE ? OR creator LIKE ? OR logical_path LIKE ? "
+                         f"OR model_id IN (SELECT model_id FROM model_tags WHERE tag LIKE ?){online_ids(lambda t: low in t)})")
     for t in tags:  # every selected tag must be present
-        where.append("model_id IN (SELECT model_id FROM model_tags WHERE tag = ?)")
         args.append(t)
+        tag = t.casefold()
+        where.append(f"(model_id IN (SELECT model_id FROM model_tags WHERE tag = ?){online_ids(lambda x: x == tag)})")
     return " AND ".join(where), args
 
 
@@ -198,11 +210,11 @@ def models(release: Optional[str] = None, q: str = "", supported: Optional[str] 
            tags: str = "", creator: Optional[str] = None, offset: int = 0, limit: int = Query(200, le=1000),
            source: str = ""):
     """Models in the grid, by release then name. Synced MyMiniFactory items are mixed in like models
-    (with mmf: true) unless `source` says otherwise; they have no tags or supported versions."""
+    (with mmf: true) unless `source` says otherwise; they have no supported versions."""
     c = db.conn()
     source = _source(source)
     tag_list = [t for t in tags.split(",") if t.strip()]
-    online = [] if source == "local" or tag_list or supported else mmf.grid_items(q, creator, release, source)
+    online = [] if source == "local" or supported else mmf.grid_items(q, creator, release, source, tag_list)
     online.sort(key=lambda d: (d["grid_release"].casefold(), d["name"].casefold()))
     where, args = _filters(release, q, tag_list, creator)
     having = ""
@@ -256,16 +268,24 @@ def _model_dicts(rows) -> list[dict]:
     covers = library.cover_file_ids([r["model_id"] for r in rows])
     images = library.cover_image_ids([r["model_id"] for r in rows])
     tag_map = _tags_for([r["model_id"] for r in rows])
+    online = mmf.local_tags()
     out = []
     for r in rows:
         d = dict(r)
         d["id"] = d.pop("model_id")
+        d["mmf_tags"] = _online_tags(d["id"], tag_map.get(d["id"], []), online)
         d["cover"] = covers.get(d["id"])
         d["cover_image"] = images.get(d["id"])
         d["tags"] = tag_map.get(d["id"], [])
         d["exts"] = sorted((d["exts"] or "").split(","))
         out.append(d)
     return out
+
+
+def _online_tags(model_id: str, own: list[str], online: dict[str, list[str]]) -> list[str]:
+    """Tags of the MyMiniFactory items matched to a model that it doesn't have itself."""
+    have = {t.casefold() for t in own}
+    return [t for t in online.get(model_id, []) if t.casefold() not in have]
 
 
 def _file_dict(r):
@@ -291,7 +311,8 @@ def model_detail(model_id: str, include_hidden: bool = False):
         "cover": covers.get(model_id),
         "main_file": main_file,
         "images": library.model_images(model_id, rows[0]["release"]),
-        "tags": _tags_for([model_id])[model_id],
+        "tags": (tags := _tags_for([model_id])[model_id]),
+        "mmf_tags": _online_tags(model_id, tags, mmf.local_tags()),
         "roots": sorted({r["model_root"] for r in rows}),
         "combine": library.combine_for(rows[0]["release"], rows[0]["model"]),
         "files": [_file_dict(r) for r in rows],
@@ -391,15 +412,32 @@ def _apply_tags(model_ids: list[str], t: TagsIn):
 
 @app.get("/api/tags")
 def all_tags(release: Optional[str] = None):
+    """Tags with how many models (and MyMiniFactory items not in the library) have them,
+    MyMiniFactory tags included; spellings that differ only in capitals count as one."""
     c = db.conn()
     where, args = "f.hidden=0", []
     if release is not None:
         where += " AND f.release=?"
         args.append(release)
-    rows = c.execute(f"""SELECT t.tag, COUNT(DISTINCT t.model_id) models FROM model_tags t
-                         JOIN files f ON f.model_id = t.model_id WHERE {where}
-                         GROUP BY t.tag COLLATE NOCASE ORDER BY t.tag COLLATE NOCASE""", args).fetchall()
-    return [dict(r) for r in rows]
+    groups: dict[str, dict] = {}
+
+    def add(tag: str, key):
+        groups.setdefault(tag.casefold(), {"tag": tag, "ids": set()})["ids"].add(key)
+
+    for r in c.execute(f"""SELECT DISTINCT t.tag, t.model_id FROM model_tags t
+                           JOIN files f ON f.model_id = t.model_id WHERE {where}""", args):
+        add(r["tag"], r["model_id"])
+    online = mmf.local_tags()
+    if online:
+        shown = {r[0] for r in c.execute(f"SELECT DISTINCT f.model_id FROM files f WHERE {where}", args)}
+        for model_id, tags in online.items():
+            if model_id in shown:
+                for t in tags:
+                    add(t, model_id)
+    for d in mmf.grid_items(release=release):
+        for t in d["tags"]:
+            add(t, ("mmf", d["id"]))
+    return [{"tag": g["tag"], "models": len(g["ids"])} for g in sorted(groups.values(), key=lambda g: g["tag"].casefold())]
 
 
 @app.post("/api/models/{model_id}/tags")
@@ -431,9 +469,7 @@ def creators(q: str = "", tags: str = ""):
                                  COUNT(DISTINCT model_id) models FROM files WHERE {where}
                                  GROUP BY creator COLLATE NOCASE ORDER BY creator COLLATE NOCASE""", args).fetchall()
     out = [{**dict(r), "mmf": 0} for r in rows]
-    if tags.strip():  # tags are only on local models
-        return out
-    online = mmf.creators(q)
+    online = mmf.creators(q, [t for t in tags.split(",") if t.strip()])
     for c in out:
         hit = online.pop(mmf.creator_key(c["creator"]), None)
         c["mmf"] = hit["items"] if hit else 0

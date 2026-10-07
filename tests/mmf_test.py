@@ -54,13 +54,13 @@ PREVIEWS = [
      "creatorName": "Dragon Forge"},
     {"originalId": 3, "id": "bundle-3", "type": "bundle", "name": "Some Bundle", "source": "PURCHASE"},
     {"originalId": 5, "id": "object-5", "type": "object", "name": "Goblin Boss", "source": "TRIBE",
-     "release": TRIBE_RELEASE, "creatorName": "MiniForge", "creatorId": 9},
+     "release": TRIBE_RELEASE, "creatorName": "MiniForge", "creatorId": 9, "tags": ["Goblin", {"name": "Fantasy"}, " goblin "]},
     {"originalId": 14, "id": "object-14", "type": "object", "name": "Tadpole Hero", "source": "TRIBE",
      "release": "type:campaign-tier;orderId:5;tierId:901", "creatorName": "Frog Folk"},
     {"originalId": 15, "id": "object-15", "type": "object", "name": "Shroud Arm", "source": "PURCHASE",
      "release": "type:store-bundle;orderId:6;bundleId:1123", "creatorName": "Fleshcraft"},
     {"originalId": 11, "id": "object-11", "type": "object", "name": "Orc Warlord", "source": "USER_GROUP",
-     "release": "32391", "creatorName": "Orc Works"},
+     "release": "32391", "creatorName": "Orc Works", "tags": "orc, Warhammer"},
     {"originalId": 12, "id": "object-12", "type": "object", "name": "Plus Paladin", "source": "MMFPLUS", "release": "39939"},
     {"originalId": 13, "id": "object-13", "type": "object", "name": "Free Frog", "source": "DOWNLOAD"},
     {"originalId": 13, "id": "object-13", "type": "object", "name": "Free Frog", "source": "FRONTIER",
@@ -328,6 +328,7 @@ with sync_playwright() as p:
 
     # The whole library from the new list: every source, release names, one item in two sources.
     popup.close()
+    fantasy = {t["tag"].casefold(): t["models"] for t in get("/api/tags")}.get("fantasy", 0)
     NEW_API.append(1)
     def sync(done="Synced"):
         with ctx.expect_page() as info:
@@ -350,6 +351,31 @@ with sync_playwright() as p:
     assert items[1]["url"] == "https://www.myminifactory.com/object/3d-print-thing-1", items[1]
     assert items[11]["creator"] == "Orc Works" and items[11]["image"].endswith("/230X230-p.png"), items[11]
     assert items[1]["local"], "still matches the local Lich King"
+
+    # Tags from MyMiniFactory: on the items, and on the local models they match (not editable there).
+    assert items[5]["tags"] == ["Goblin", "Fantasy"] and items[11]["tags"] == ["orc", "Warhammer"], (items[5], items[11])
+    boss = get("/api/models?q=goblin%20boss&source=local")["items"][0]
+    assert boss["mmf_tags"] == ["Goblin", "Fantasy"] and get(f"/api/models/{boss['id']}")["mmf_tags"] == ["Goblin", "Fantasy"], boss
+    assert boss["id"] in [m["id"] for m in get("/api/models?tags=fantasy")["items"]]
+    assert boss["id"] in [m["id"] for m in get("/api/models?q=tag:goblin")["items"]]
+    assert [m["id"] for m in get("/api/models?tags=orc")["items"]] == [11]
+    assert [m["id"] for m in get("/api/models?q=tag:Warhammer")["items"]] == [11]
+    assert 11 in [m["id"] for m in get("/api/models?q=warham")["items"]]
+    assert get("/api/models?tags=orc&source=local")["total"] == 0
+    tag_counts = {t["tag"].casefold(): t["models"] for t in get("/api/tags")}
+    assert tag_counts["fantasy"] == fantasy + 1 and tag_counts["orc"] == 1 and tag_counts["goblin"] == 1, tag_counts
+    assert [t["tag"] for t in get("/api/tags")].count("Goblin") == 1
+    assert {r["release"] for r in get("/api/releases?tags=orc")} == {"38. OPR April 2023 Rewards"}
+    assert {c["creator"]: c["mmf"] for c in get("/api/creators?tags=orc")} == {"Orc Works": 1}
+    app.reload()
+    app.wait_for_selector("#tagList [data-tag]")
+    if app.locator(".side-filter input[data-for='tagList']").is_visible():  # long lists show the first few
+        app.fill(".side-filter input[data-for='tagList']", "orc")
+    app.click("#tagList [data-tag='orc']")
+    app.wait_for_function("document.querySelectorAll('#grid .card').length === 1")
+    assert app.locator("#grid .card.mmf[data-mmf='11'] .badge.tag").count() == 2
+    if SHOTS:
+        app.screenshot(path=f"{SHOTS}/mmf-tags.png")
 
     browser.close()
 

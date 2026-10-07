@@ -101,6 +101,7 @@ function card(m) {
   if (m.unsupported_files) b.push(`<span class="badge unsup">unsupported</span>`);
   if (m.options) b.push(`<span class="badge">${m.options} option groups</span>`);
   (m.tags || []).forEach((t) => b.push(`<span class="badge tag">${esc(t)}</span>`));
+  b.push(...mmfTagBadges(m.mmf_tags || [], "from-mmf"));
   m.exts.filter((x) => x && x !== ".stl").forEach((x) => b.push(`<span class="badge">${esc(x.slice(1).toUpperCase())}</span>`));
   return `<div class="card ${state.picked?.has(m.id) ? "picked" : ""}" data-id="${m.id}">
     <div class="thumb">${thumb(m)}</div>
@@ -330,14 +331,21 @@ async function loadMmfSide() {
 $("#mmfList").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-src]"); if (!li) return;
   state.source = state.source === li.dataset.src ? "" : li.dataset.src;
-  if (state.source && state.source !== "local") state.tags = [];
   $("#sidebar").classList.remove("open");
   refresh();
 });
 
+// MyMiniFactory items often carry many tags; cards show a few, the model window shows them all.
+function mmfTagBadges(tags, cls = "") {
+  const shown = tags.slice(0, 4).map((t) => `<span class="badge tag ${cls}" title="Tag on MyMiniFactory">${esc(t)}</span>`);
+  if (tags.length > 4) shown.push(`<span class="badge muted" title="${esc(tags.slice(4).join(", "))}">+${tags.length - 4}</span>`);
+  return shown;
+}
+
 function mmfCard(m) {
   const b = [m.local ? `<span class="badge sup">in your library</span>` : m.queued ? `<span class="badge tag">waiting to download</span>` : `<span class="badge unsup">not downloaded</span>`];
   [...new Set(m.sources.map((s) => s.source))].forEach((s) => b.push(`<span class="badge">${MMF_SOURCES[s] || esc(s)}</span>`));
+  b.push(...mmfTagBadges(m.tags || []));
   const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))].join(", ");
   const img = m.image ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(m.image)}" alt="${esc(m.name)}" class="photo"
       onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">` : `<div class="ph">No preview</div>`;
@@ -384,7 +392,7 @@ function renderMmfModel() {
        <div class="row"><a class="button-like primary" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Download on MyMiniFactory ↗</a>
        <button id="mmfImport">Import the download…</button></div>`;
   $("#mFiles").innerHTML = `<div class="mmf-info">
-      <div class="badges">${kinds.map((k) => `<span class="badge">${esc(k)}</span>`).join("")}
+      <div class="badges">${kinds.map((k) => `<span class="badge">${esc(k)}</span>`).join("")}${m.tags.map((t) => `<span class="badge tag">${esc(t)}</span>`).join("")}
         <a class="badge link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Open on MyMiniFactory ↗</a></div>
       ${dl}
     </div>
@@ -470,7 +478,6 @@ async function loadTags() {
 function toggleTag(tag) {
   const i = state.tags.findIndex((x) => x.toLowerCase() === tag.toLowerCase());
   if (i >= 0) state.tags.splice(i, 1); else state.tags.push(tag);
-  if (state.source !== "local") state.source = "";  // only models in the library have tags
   refresh();
 }
 $("#tagList").addEventListener("click", (e) => { const li = e.target.closest("[data-tag]"); if (li) { $("#sidebar").classList.remove("open"); toggleTag(li.dataset.tag); } });
@@ -479,7 +486,9 @@ $("#activeTags").addEventListener("click", (e) => { const b = e.target.closest("
 const splitTags = (s) => s.split(",").map((t) => t.trim()).filter(Boolean);
 
 function renderModelTags() {
-  $("#mTags").innerHTML = state.model.tags.map((t) => `<span class="badge tag">${esc(t)}<button data-rm="${esc(t)}" title="Remove tag">✕</button></span>`).join("");
+  $("#mTags").innerHTML = state.model.tags.map((t) => `<span class="badge tag">${esc(t)}<button data-rm="${esc(t)}" title="Remove tag">✕</button></span>`).join("") +
+    (state.model.mmf_tags || []).filter((t) => !state.model.tags.some((x) => x.toLowerCase() === t.toLowerCase()))
+      .map((t) => `<span class="badge tag from-mmf" title="Tag on MyMiniFactory">${esc(t)}</span>`).join("");
 }
 async function changeModelTags(add, remove) {
   const r = await api(`/api/models/${state.model.id}/tags`, { method: "POST", body: JSON.stringify({ add, remove }) });
