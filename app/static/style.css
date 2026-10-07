@@ -235,3 +235,4 @@ body.sync-page a { color: var(--accent); }
 .mmf-pics img { width: 100%; height: 100%; object-fit: cover; display: block; }
 a.button-like { color: inherit; text-decoration: none; }
 a.button-like.primary { background: var(--accent); border-color: var(--accent); color: #08131d; font-weight: 600; }
+.badge.tag.from-mmf { border-style: dashed; }

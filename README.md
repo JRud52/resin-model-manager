@@ -139,7 +139,11 @@ groups them by **release** and **model**, separates **supported** and
   like any other model, under their release, and are found by search and by the
   Creators and Releases filters. The MyMiniFactory section of the sidebar
   filters them: *Only MyMiniFactory*, *Not in your library* or *Hide
-  MyMiniFactory* (click again to show everything). MyMiniFactory creators are
+  MyMiniFactory* (click again to show everything). Their MyMiniFactory tags
+  come along: they show on the items and work in the tag filter and in
+  `tag:` searches like your own tags. A model in your library that matches an
+  item gets the item's tags too, shown with a dashed outline; they aren't
+  stored on the model, so they can't be removed there. MyMiniFactory creators are
   added to the Creators list, merged with
   your own creators when the names only differ in spaces, capitals, special
   characters or words like "Miniatures" ("CobraMode" is "Cobra Mode"). If the

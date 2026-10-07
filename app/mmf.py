@@ -33,6 +33,30 @@ def _url(v) -> str:
     return v[:1000] if v.startswith("https://") and not any(c in v for c in "\"'<> \n\r\t") else ""
 
 
+def _tags(v) -> list[str]:
+    """Tags as the site sends them: a list of names or of {name: ...}, or one comma-separated string."""
+    if isinstance(v, str):
+        v = v.split(",")
+    if not isinstance(v, list):
+        return []
+    out, seen = [], set()
+    for t in v[:200]:
+        if isinstance(t, dict):
+            t = next((t[k] for k in ("name", "label", "tag", "title", "slug") if isinstance(t.get(k), str) and t[k].strip()), "")
+        if not isinstance(t, str):
+            continue
+        t = " ".join(t.split())[:60]
+        if t and t.casefold() not in seen:
+            seen.add(t.casefold())
+            out.append(t)
+    return out[:50]
+
+
+def has_tags(item_tags: list[str], wanted: list[str]) -> bool:
+    have = {t.casefold() for t in item_tags}
+    return all(t.casefold() in have for t in wanted)
+
+
 def import_library(payload: dict) -> dict:
     """Store a sync. payload = {"items": [...], "complete": ["purchase", ...]}.
 
@@ -74,6 +98,7 @@ def import_library(payload: dict) -> dict:
             "creator_url": _url(it.get("creator_url")) or old.get("creator_url", ""),
             "url": _url(it.get("url")) or old.get("url", "") or f"https://www.myminifactory.com/object/{oid}",
             "image": image,
+            "tags": json.dumps(_tags(it.get("tags")) or json.loads(old.get("tags", "[]"))),
         }
         links.add((oid, source, _text(it.get("collection"), 300)))
     now = time.time()
@@ -81,11 +106,12 @@ def import_library(payload: dict) -> dict:
     with c:
         for s in complete:
             c.execute("DELETE FROM mmf_links WHERE source=?", (s,))
-        c.executemany("""INSERT INTO mmf_items(id, name, creator, creator_url, url, image, images, downloads, updated)
-                         VALUES (:id, :name, :creator, :creator_url, :url, :image, :images, :downloads, :updated)
+        c.executemany("""INSERT INTO mmf_items(id, name, creator, creator_url, url, image, images, downloads, tags, updated)
+                         VALUES (:id, :name, :creator, :creator_url, :url, :image, :images, :downloads, :tags, :updated)
                          ON CONFLICT(id) DO UPDATE SET name=excluded.name, creator=excluded.creator,
                          creator_url=excluded.creator_url, url=excluded.url, image=excluded.image,
-                         images=excluded.images, downloads=excluded.downloads, updated=excluded.updated""",
+                         images=excluded.images, downloads=excluded.downloads, tags=excluded.tags,
+                         updated=excluded.updated""",
                       [{"id": k, **v, "updated": now} for k, v in rows.items()])
         c.executemany("INSERT OR IGNORE INTO mmf_links(item_id, source, collection) VALUES (?,?,?)", sorted(links))
         c.execute("DELETE FROM mmf_items WHERE id NOT IN (SELECT item_id FROM mmf_links)")
@@ -255,9 +281,14 @@ def _match(name: str, creator: str, index: _Index):
 def _search(q: str) -> tuple[str, list]:
     where, args = [], []
     for word in q.split():
+        if word.lower().startswith("tag:") and len(word) > 4:  # exact tag search
+            where.append("EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ? COLLATE NOCASE)")
+            args.append(word[4:])
+            continue
         where.append("(i.name LIKE ? OR i.creator LIKE ? OR i.id IN "
-                     "(SELECT item_id FROM mmf_links WHERE collection LIKE ?))")
-        args += [f"%{word}%"] * 3
+                     "(SELECT item_id FROM mmf_links WHERE collection LIKE ?) "
+                     "OR EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value LIKE ?))")
+        args += [f"%{word}%"] * 4
     return ("WHERE " + " AND ".join(where) if where else ""), args
 
 
@@ -302,7 +333,8 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
     return {"total": len(out), "items": out[offset:offset + limit]}
 
 
-def grid_items(q: str = "", creator: str | None = None, release: str | None = None, source: str = "") -> list[dict]:
+def grid_items(q: str = "", creator: str | None = None, release: str | None = None, source: str = "",
+               tags: list[str] = ()) -> list[dict]:
     """Items for the main grid, shown like local models. source '' or 'missing': items not in the
     library; 'mmf': all of them, the ones in the library under their local release (grid_release)."""
     out = []
@@ -312,15 +344,17 @@ def grid_items(q: str = "", creator: str | None = None, release: str | None = No
         d["grid_release"] = d["local"]["release"] if d["local"] else d["release"]
         if release is not None and d["grid_release"].casefold() != release.casefold():
             continue
+        if tags and not has_tags(d["tags"], tags):
+            continue
         d["mmf"] = True
         out.append(d)
     return out
 
 
-def releases(q: str = "", creator: str | None = None, source: str = "") -> dict[str, dict]:
+def releases(q: str = "", creator: str | None = None, source: str = "", tags: list[str] = ()) -> dict[str, dict]:
     """casefolded release -> {"release", "creator", "mmf": count} of the grid items (see grid_items)."""
     groups: dict[str, dict] = {}
-    for d in grid_items(q, creator, None, source):
+    for d in grid_items(q, creator, None, source, tags):
         g = groups.setdefault(d["grid_release"].casefold(), {"release": d["grid_release"], "creators": {}, "mmf": 0})
         g["mmf"] += 1
         if d["creator"]:
@@ -336,15 +370,39 @@ def _item(r, names: dict[str, str] | None = None) -> dict:
     d["images"] = gallery or json.loads(d.get("images") or "[]") or ([d["image"]] if d.get("image") else [])
     d["downloads"] = len(json.loads(d.get("downloads") or "[]"))
     d["queued"] = bool(d.get("queued"))
+    d["tags"] = json.loads(d.get("tags") or "[]")
     return d
 
 
-def creators(q: str = "") -> dict[str, dict]:
+_local_tags_cache: tuple = (None, {})
+
+
+def local_tags() -> dict[str, list[str]]:
+    """model_id -> tags of the MyMiniFactory items matched to that local model. Not stored on the
+    model: they follow the match, and stay out of the model's own (editable) tags."""
+    global _local_tags_cache
+    _local_index()
+    sig = (_index_cache[0],) + tuple(db.conn().execute(
+        "SELECT COUNT(*), MAX(updated), TOTAL(length(tags)) FROM mmf_items").fetchone())
+    if _local_tags_cache[0] != sig:
+        out: dict[str, list[str]] = {}
+        for d in _matched_items():
+            mid = (d["local"] or {}).get("model_id")
+            if mid and d["tags"]:
+                have = out.setdefault(mid, [])
+                have += [t for t in d["tags"] if t.casefold() not in {x.casefold() for x in have}]
+        _local_tags_cache = (sig, out)
+    return _local_tags_cache[1]
+
+
+def creators(q: str = "", tags: list[str] = ()) -> dict[str, dict]:
     """creator_key -> {"creator": the most used spelling, "items": count} of the synced items."""
     where, args = _search(q)
     spellings: dict[str, dict[str, int]] = {}
     renamed = creator_names()
-    for r in db.conn().execute(f"SELECT i.creator FROM mmf_items i {where}", args):
+    for r in db.conn().execute(f"SELECT i.creator, i.tags FROM mmf_items i {where}", args):
+        if tags and not has_tags(json.loads(r["tags"] or "[]"), tags):
+            continue
         shown = display_creator(r["creator"], renamed)
         names = spellings.setdefault(creator_key(shown), {})
         names[shown] = names.get(shown, 0) + 1
