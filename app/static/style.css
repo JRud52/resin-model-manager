@@ -53,8 +53,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 #sidebar li.cut { display: none; }
 #sidebar li.show-more { color: var(--accent); font-size: 13px; }
 #tagList li.show-more { background: none; border: 0; padding: 2px 4px; cursor: pointer; }
-#releases .mmf-tag { font-size: 10px; padding: 0 5px; margin-left: 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); vertical-align: 1px; }
-#releases li.active .mmf-tag { color: #08131d; border-color: #08131d; }
 .side-title .link { all: unset; cursor: pointer; margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent); }
 .side-title .link:hover { text-decoration: underline; }
 #creatorDlg { max-width: min(560px, 96vw); }
@@ -210,12 +208,6 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
 #mmfList li.active { background: var(--accent); color: #08131d; }
 #mmfList li.active .muted { color: #08131d; }
 #mmfList .name { flex: 1; }
-#mmfStrip { margin-bottom: 14px; }
-#mmfStrip .side-title { padding: 0 0 6px; }
-#mmfStrip .strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
-.mmf-chip { display: flex; align-items: center; gap: 8px; flex-shrink: 0; max-width: 300px; padding: 4px 10px 4px 4px; }
-.mmf-chip img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; }
-.mmf-chip span:not(.badge) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge.link { color: var(--accent); text-decoration: none; }
 .badge.link:hover { border-color: var(--accent); }
 #mmfDlg { max-width: min(620px, 96vw); }
