@@ -401,7 +401,8 @@ async function openMmfModel(id) {
   dlg.classList.add("mmf-mode");
   const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))];
   $("#mName").textContent = m.name;
-  $("#mRelease").textContent = [m.creator, ...where].filter(Boolean).join(" / ") + " · MyMiniFactory";
+  const when = /^\d/.test(m.published || "") ? " · published " + new Date(m.published).toLocaleDateString() : "";
+  $("#mRelease").textContent = [m.creator, ...where].filter(Boolean).join(" / ") + " · MyMiniFactory" + when;
   $("#editForm").classList.add("hidden");
   $("#mFilter").innerHTML = "";
   $("#mTagInput").value = "";

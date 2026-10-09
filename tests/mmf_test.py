@@ -23,8 +23,9 @@ def obj(i, name, creator="Dragon Forge", **extra):
 
 WYRM_PICS = {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/2.png"}}, {"large": {"url": f"{CDN}/7.png"}},
                        {"standard": {"url": f"{CDN}/8.png"}}]}
-PURCHASES = [obj(1, "Lich King - Supported"), obj(2, "Ancient Wyrm", images=WYRM_PICS), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
-PLEDGES = [obj(4, "Siege Tower", creator="Castle_Works!", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]})]
+PURCHASES = [obj(1, "Lich King - Supported", published_at="2024-05-01T10:00:00Z"), obj(2, "Ancient Wyrm", images=WYRM_PICS), obj(3, "Javascript", absolute_url="javascript:alert(1)")]
+PLEDGES = [obj(4, "Siege Tower", creator="Castle_Works!", pledges={"items": [{"name": "Kickstarter: Castle Siege"}]},
+               publishedAt=1700000000000)]  # 2023-11-14, in milliseconds
 # "Mini Forge" here. The shaman's display name is on its designer, its user_name is the account slug.
 def small(name):  # the library's own small picture link
     return {"items": [{"is_primary": True, "standard": {"url": f"{CDN}/object-images/gb/images/230X230-{name}.png"}}]}
@@ -90,7 +91,8 @@ def new_api(url):
                  "url": f"thing-{i}", "creator": {"username": f"maker-{i}", "name": "" if i == "12" else None},
                  "previewUrl": f"{CDN}/object-images/p{i}/images/1000X1000-p.png",
                  "images": [{"url": f"{CDN}/object-images/p{i}/images/720X720-p.png",
-                             "thumbnailUrl": f"{CDN}/object-images/p{i}/images/230X230-p.png"}]} for i in ids]
+                             "thumbnailUrl": f"{CDN}/object-images/p{i}/images/230X230-p.png"}],
+                 **({"publishedAt": "2023-09-01 12:00:00"} if i == "12" else {})} for i in ids]
     return NEW_META.get(path)
 
 
@@ -113,7 +115,7 @@ def fake_mmf(route):
         body = page_of(TRIBE, page)
     elif url.endswith("/api/v2/objects/2"):  # MyMiniFactory's own data for the item: just the listing's images
         a = f"{CDN}/object-images/aa2/images"
-        return route.fulfill(status=200, content_type="application/json", body=json.dumps({"id": 2, "images": [
+        return route.fulfill(status=200, content_type="application/json", body=json.dumps({"id": 2, "published_at": "2025-02-03T09:30:00+01:00", "images": [
             {"is_primary": n == "a", "thumbnail": {"url": f"{a}/230X230-wyrm-{n}.png"},
              "standard": {"url": f"{a}/720X720-wyrm-{n}.png"}, "large": {"url": f"{a}/1000X1000-wyrm-{n}.png"}}
             for n in "abcd"]}))
@@ -199,8 +201,13 @@ with sync_playwright() as p:
     local_total = get("/api/models?source=local")["total"]
     grid = get("/api/models?limit=1000")
     assert grid["total"] == local_total + 4 and sorted(m["id"] for m in grid["items"] if m.get("mmf")) == [2, 3, 4, 6], grid["total"]
-    keys = [(m.get("grid_release") or m["release"]).casefold() for m in grid["items"]]
-    assert keys == sorted(keys), "sorted by release with the local models"
+    # MyMiniFactory items first, newest published first (the Wyrm's date came from its object data),
+    # those without a date after them by name; then the library's models by release.
+    assert [m["id"] for m in grid["items"][:4]] == [2, 4, 6, 3], [(m["id"], m["published"]) for m in grid["items"][:4]]
+    assert items["Lich King - Supported"]["published"] == "2024-05-01T10:00:00Z"
+    assert grid["items"][0]["published"] == "2025-02-03T08:30:00Z" and grid["items"][1]["published"] == "2023-11-14T22:13:20Z"
+    keys = [m["release"].casefold() for m in grid["items"][4:]]
+    assert keys == sorted(keys), "the library's models by release after them"
     assert [m["id"] for m in get("/api/models?limit=2&offset=0")["items"]] + [m["id"] for m in get("/api/models?limit=1000&offset=2")["items"]] == \
         [m["id"] for m in grid["items"]], "paging"
     assert [m["id"] for m in get("/api/models?release=Greenskin%20Tribe")["items"]] == [6]
@@ -364,6 +371,8 @@ with sync_playwright() as p:
     assert items[1]["url"] == "https://www.myminifactory.com/object/3d-print-thing-1", items[1]
     assert items[11]["creator"] == "Orc Works" and items[11]["image"].endswith("/230X230-p.png"), items[11]
     assert items[1]["local"], "still matches the local Lich King"
+    assert items[12]["published"] == "2023-09-01T12:00:00Z", items[12]
+    assert items[1]["published"] == "2024-05-01T10:00:00Z", "a sync without the date keeps the one found before"
 
     # Tags from MyMiniFactory: on the items, and on the local models they match (not editable there).
     assert items[5]["mmf_tags"] == ["Goblin", "Fantasy"] and items[11]["mmf_tags"] == ["orc", "Warhammer"], (items[5], items[11])

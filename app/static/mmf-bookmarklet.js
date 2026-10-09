@@ -4,7 +4,7 @@
    and hands it to the app's /mmf-sync window (postMessage, because an https page
    can't post to a plain-http NAS address). If that window can't be reached, the
    library is saved as a file to upload in the app instead. Afterwards it reads the
-   full-size images of items that don't have them yet. Files aren't downloaded:
+   full-size images and published dates of items that don't have them yet. Files aren't downloaded:
    MyMiniFactory serves them from a host page scripts can't read. */
 (function () {
   var APP = "__APP__";
@@ -76,6 +76,19 @@
     }).filter(Boolean);
   }
 
+  // When the item was published on MyMiniFactory. The site's field names differ between its lists
+  // and its object data, so the first one found wins; the app reads ISO text or epoch numbers.
+  var DATE_KEYS = ["published_at", "publishedAt", "publication_date", "publicationDate", "publishDate",
+                   "published", "date_published", "datePublished", "created_at", "createdAt"];
+  function published() {
+    for (var i = 0; i < arguments.length; i++) {
+      var o = arguments[i];
+      if (!o || typeof o !== "object") continue;
+      for (var k of DATE_KEYS) if (o[k] && typeof o[k] !== "object") return o[k];
+    }
+    return "";
+  }
+
   function slim(o, source, collection) {
     var pledge = list(o.pledges && (o.pledges.items || o.pledges))[0];
     return {
@@ -85,7 +98,7 @@
       // Display name first ("The Print Goes Ever On"), the account slug only as a fallback.
       creator: (o.designer && o.designer.name) || o.user_name || o.username || (o.designer && o.designer.username) || "",
       creator_url: o.user_url || "", url: o.absolute_url || o.url || o.show_url || "", image: picture(o),
-      tags: tagList(o.tags)
+      tags: tagList(o.tags), published: published(o)
     };
   }
 
@@ -119,15 +132,16 @@
   // The library lists only a small picture per item. MyMiniFactory's own object data
   // (/api/v2/objects/{id}, read with the user's login) lists just the listing's images, in
   // several sizes; the item page also shows other people's prints, so it isn't used.
+  // The same data gives the item's published date.
   async function pageImages(it) {
     var r = await fetch("/api/v2/objects/" + encodeURIComponent(it.id), {
       credentials: "include", headers: { Accept: "application/json" } });
     if (!r.ok) throw new Error("HTTP " + r.status);
     var o = await r.json();
-    return list(o.images && (o.images.items || o.images)).map(function (img) {
+    return { id: it.id, published: published(o), images: list(o.images && (o.images.items || o.images)).map(function (img) {
       var f = img && (img.large || img.standard || img.original) || {};
       return typeof f === "string" ? f : f.url;
-    }).filter(function (u) { return /^https:\/\//.test(u || ""); });
+    }).filter(function (u) { return /^https:\/\//.test(u || ""); }) };
   }
   async function galleries(items) {
     items = items.slice(0, 400);  // a big first sync reads the rest on the next runs
@@ -135,10 +149,10 @@
     async function worker() {
       while (next < items.length) {
         var it = items[next++];
-        try { batch.push({ id: it.id, images: await pageImages(it) }); } catch (err) { /* read again next sync */ }
+        try { batch.push(await pageImages(it)); } catch (err) { /* read again next sync */ }
         done++;
         if (batch.length >= 20) send({ type: "mmf-gallery", items: batch.splice(0) });
-        say("Reading full-size images… " + done + " of " + items.length);
+        say("Reading full-size images and dates… " + done + " of " + items.length);
       }
     }
     await Promise.all([worker(), worker(), worker()]);
@@ -254,7 +268,7 @@
         creator_url: creator.username ? "https://www.myminifactory.com/users/" + encodeURIComponent(creator.username) : "",
         url: d.url ? "https://www.myminifactory.com/object/3d-print-" + d.url : "/object/" + p.originalId,
         image: thumb || d.previewUrl || "", images: pics, downloads: [],
-        tags: tagList(p.tags).length ? tagList(p.tags) : tagList(d.tags)
+        tags: tagList(p.tags).length ? tagList(p.tags) : tagList(d.tags), published: published(d, p)
       });
     });
     Object.keys(KINDS).forEach(function (k) { complete.push(KINDS[k]); });

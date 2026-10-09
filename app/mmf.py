@@ -12,6 +12,7 @@ import json
 import re
 import time
 import unicodedata
+from datetime import datetime, timezone
 
 from . import autotag, classify, db
 
@@ -50,6 +51,26 @@ def _tags(v) -> list[str]:
             seen.add(t.casefold())
             out.append(t)
     return out[:50]
+
+
+# published: '' = not known yet, NO_DATE = the site gave none, else an ISO date "2025-07-01T12:00:00Z".
+NO_DATE = "-"
+
+
+def _date(v) -> str:
+    """A date as the site sends it (ISO text, or seconds or milliseconds since 1970) as ISO UTC text."""
+    if isinstance(v, bool) or v in (None, ""):
+        return ""
+    try:
+        if isinstance(v, (int, float)) or re.fullmatch(r"\d{9,13}(\.\d+)?", str(v).strip()):
+            n = float(v)
+            d = datetime.fromtimestamp(n / 1000 if n > 1e11 else n, timezone.utc)
+        else:
+            d = datetime.fromisoformat(str(v).strip().replace("Z", "+00:00").replace(" ", "T", 1))
+            d = d.replace(tzinfo=d.tzinfo or timezone.utc).astimezone(timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return ""
+    return d.strftime("%Y-%m-%dT%H:%M:%SZ") if 1990 < d.year < 2100 else ""
 
 
 def has_tags(item_tags: list[str], wanted: list[str]) -> bool:
@@ -99,6 +120,7 @@ def import_library(payload: dict) -> dict:
             "url": _url(it.get("url")) or old.get("url", "") or f"https://www.myminifactory.com/object/{oid}",
             "image": image,
             "tags": json.dumps(_tags(it.get("tags")) or json.loads(old.get("tags", "[]"))),
+            "published": _date(it.get("published")) or old.get("published", ""),
         }
         links.add((oid, source, _text(it.get("collection"), 300)))
     now = time.time()
@@ -106,11 +128,14 @@ def import_library(payload: dict) -> dict:
     with c:
         for s in complete:
             c.execute("DELETE FROM mmf_links WHERE source=?", (s,))
-        c.executemany("""INSERT INTO mmf_items(id, name, creator, creator_url, url, image, images, downloads, tags, updated)
-                         VALUES (:id, :name, :creator, :creator_url, :url, :image, :images, :downloads, :tags, :updated)
+        c.executemany("""INSERT INTO mmf_items(id, name, creator, creator_url, url, image, images, downloads, tags,
+                         published, updated)
+                         VALUES (:id, :name, :creator, :creator_url, :url, :image, :images, :downloads, :tags,
+                         :published, :updated)
                          ON CONFLICT(id) DO UPDATE SET name=excluded.name, creator=excluded.creator,
                          creator_url=excluded.creator_url, url=excluded.url, image=excluded.image,
                          images=excluded.images, downloads=excluded.downloads, tags=excluded.tags,
+                         published=COALESCE(NULLIF(excluded.published, ''), mmf_items.published),
                          updated=excluded.updated""",
                       [{"id": k, **v, "updated": now} for k, v in rows.items()])
         c.executemany("INSERT OR IGNORE INTO mmf_links(item_id, source, collection) VALUES (?,?,?)", sorted(links))
@@ -388,6 +413,12 @@ def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
     return {"total": len(out), "items": out[offset:offset + limit]}
 
 
+def newest_first(items: list[dict]) -> list[dict]:
+    """Items by published date, newest first; items without one after them, by name."""
+    return sorted(sorted(items, key=lambda d: d["name"].casefold()),
+                  key=lambda d: d["published"] if d["published"][:1].isdigit() else "", reverse=True)
+
+
 def grid_items(q: str = "", creator: str | None = None, release: str | None = None, source: str = "",
                tags: list[str] = ()) -> list[dict]:
     """Items for the main grid, shown like local models. source '' or 'missing': items not in the
@@ -534,13 +565,14 @@ def queue() -> list[dict]:
 
 
 def gallery_needed() -> list[dict]:
-    """Items whose page hasn't been read for its full-size images yet."""
+    """Items whose MyMiniFactory data hasn't been read for its full-size images or published date yet."""
     return [{"id": r["id"], "url": r["url"], "image": r["image"]} for r in db.conn().execute(
-        "SELECT id, url, image FROM mmf_items WHERE gallery='' ORDER BY id")]
+        "SELECT id, url, image FROM mmf_items WHERE gallery='' OR published='' ORDER BY gallery != '', id")]
 
 
 def set_galleries(entries: list) -> int:
-    """Store the images the bookmarklet read from item pages: [{"id", "images": [url, ...]}]."""
+    """Store what the bookmarklet read from each item's data: [{"id", "images": [url, ...], "published"}].
+    An item read without a date is marked so it isn't read again for one."""
     rows = []
     for e in entries[:MAX_ITEMS]:
         if not isinstance(e, dict) or not isinstance(e.get("images"), list):
@@ -550,10 +582,11 @@ def set_galleries(entries: list) -> int:
         except (TypeError, ValueError):
             continue
         images = list(dict.fromkeys(u for u in (_url(x) for x in e["images"][:60] if isinstance(x, str)) if u))
-        rows.append((json.dumps(images), oid))
+        rows.append((json.dumps(images), _date(e.get("published")) or NO_DATE, oid))
     c = db.conn()
     with c:
-        c.executemany("UPDATE mmf_items SET gallery=? WHERE id=?", rows)
+        c.executemany("UPDATE mmf_items SET gallery=?, published=CASE WHEN published GLOB '[0-9]*' "
+                      "THEN published ELSE ? END WHERE id=?", rows)
     return len(rows)
 
 

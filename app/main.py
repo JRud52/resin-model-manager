@@ -209,13 +209,13 @@ def _clean_tags(tags: list[str]) -> list[str]:
 def models(release: Optional[str] = None, q: str = "", supported: Optional[str] = None,
            tags: str = "", creator: Optional[str] = None, offset: int = 0, limit: int = Query(200, le=1000),
            source: str = ""):
-    """Models in the grid, by release then name. Synced MyMiniFactory items are mixed in like models
-    (with mmf: true) unless `source` says otherwise; they have no supported versions."""
+    """Models in the grid: synced MyMiniFactory items first, newest published first, then the library's
+    models by release and name. MyMiniFactory items are mixed in like models (with mmf: true) unless
+    `source` says otherwise; they have no supported versions."""
     c = db.conn()
     source = _source(source)
     tag_list = [t for t in tags.split(",") if t.strip()]
-    online = [] if source == "local" or supported else mmf.grid_items(q, creator, release, source, tag_list)
-    online.sort(key=lambda d: (d["grid_release"].casefold(), d["name"].casefold()))
+    online = [] if source == "local" or supported else mmf.newest_first(mmf.grid_items(q, creator, release, source, tag_list))
     where, args = _filters(release, q, tag_list, creator)
     having = ""
     if supported == "yes":
@@ -224,35 +224,17 @@ def models(release: Optional[str] = None, q: str = "", supported: Optional[str] 
         having = "HAVING SUM(supported = 0) > 0"
     elif supported == "unknown":
         having = "HAVING SUM(supported IS NULL) > 0"
+    items = online[offset:offset + limit]
     if source in ("mmf", "missing"):
-        local_total, page = 0, []
-    elif not online:
-        local_total = c.execute(f"SELECT COUNT(*) FROM (SELECT model_id FROM files WHERE {where} GROUP BY model_id {having})",
-                                args).fetchone()[0]
-        page = None  # plain SQL paging below
-    else:
-        keys = c.execute(f"""SELECT model_id, MIN(release) release, MIN(model) model FROM files WHERE {where}
-                             GROUP BY model_id {having}""", args).fetchall()
-        local_total = len(keys)
-        merged = sorted([(r["release"].casefold(), r["model"].casefold(), r["model_id"]) for r in keys] +
-                        [(d["grid_release"].casefold(), d["name"].casefold(), d) for d in online],
-                        key=lambda e: (e[0], e[1]))
-        page = [e[2] for e in merged[offset:offset + limit]]
-    order = "ORDER BY MIN(release) COLLATE NOCASE, MIN(model) COLLATE NOCASE"
-    if page is None:
-        rows = c.execute(f"""{_MODEL_SELECT} WHERE {where} GROUP BY model_id {having} {order} LIMIT ? OFFSET ?""",
-                         args + [limit, offset]).fetchall()
-    else:
-        ids = [e for e in page if isinstance(e, str)]
-        rows = c.execute(f"""{_MODEL_SELECT} WHERE {where} AND model_id IN ({",".join("?" * len(ids))})
-                             GROUP BY model_id {having}""", args + ids).fetchall() if ids else []
-    local = {d["id"]: d for d in _model_dicts(rows)}
-    if page is None:
-        items = list(local.values())
-    elif source in ("mmf", "missing"):
-        items = online[offset:offset + limit]
-    else:
-        items = [local[e] if isinstance(e, str) else e for e in page if not isinstance(e, str) or e in local]
+        return {"total": len(online), "items": items}
+    local_total = c.execute(f"SELECT COUNT(*) FROM (SELECT model_id FROM files WHERE {where} GROUP BY model_id {having})",
+                            args).fetchone()[0]
+    local_offset, local_limit = max(0, offset - len(online)), limit - len(items)
+    if local_limit > 0:
+        rows = c.execute(f"""{_MODEL_SELECT} WHERE {where} GROUP BY model_id {having}
+                             ORDER BY MIN(release) COLLATE NOCASE, MIN(model) COLLATE NOCASE LIMIT ? OFFSET ?""",
+                         args + [local_limit, local_offset]).fetchall()
+        items += _model_dicts(rows)
     return {"total": local_total + len(online), "items": items}
 
 
