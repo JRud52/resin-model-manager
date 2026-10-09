@@ -1311,8 +1311,12 @@ async function entriesToItems(entry, prefix = "") {
   }
   return out;
 }
-let dragDepth = 0;
-const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+let dragDepth = 0, pageDrag = false;
+// Browsers report a dragged <img> as "Files", so drags that start on this page never count as uploads.
+// Images aren't draggable at all; other in-page drags (the bookmarklet) still work.
+window.addEventListener("dragstart", (e) => { if (e.target instanceof HTMLImageElement) e.preventDefault(); else pageDrag = true; });
+window.addEventListener("dragend", () => { pageDrag = false; });
+const hasFiles = (e) => !pageDrag && [...(e.dataTransfer?.types || [])].includes("Files");
 window.addEventListener("dragenter", (e) => { if (hasFiles(e)) { dragDepth++; document.body.classList.add("dragging"); } });
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
 window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
