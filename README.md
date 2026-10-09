@@ -131,12 +131,13 @@ groups them by **release** and **model**, separates **supported** and
   MyMiniFactory* and *Import the download…*, which opens Import files with the
   item as the release and its creator filled in. Your
   MyMiniFactory login is never stored by the app. The first time the bookmark
-  sees an item it also reads all its listing images in full size from
-  MyMiniFactory (the library list only has one or two; a big first sync reads
-  400 items per run). Items whose name shares
+  sees an item it also reads all its listing images in full size and its
+  published date from MyMiniFactory (the library list only has one or two
+  images; a big first sync reads 400 items per run). Items whose name shares
   its words with a local release or model (by the same creator, or a close
   match by anyone) are marked *in your library*. The rest show up in the grid
-  like any other model, under their release, and are found by search and by the
+  like any other model, ahead of your own models: newest published first, then
+  any without a date by name, then your library by release and model. They're found by search and by the
   Creators and Releases filters. The MyMiniFactory section of the sidebar
   filters them: *Only MyMiniFactory*, *Not in your library* or *Hide
   MyMiniFactory* (click again to show everything). Their MyMiniFactory tags
