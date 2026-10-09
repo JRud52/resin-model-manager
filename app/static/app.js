@@ -336,7 +336,25 @@ async function loadMmfSide() {
   $("#mmfList").innerHTML = s.total
     ? li("mmf", "Only MyMiniFactory", s.total) + li("missing", "Not in your library", s.missing) + li("local", "Hide MyMiniFactory")
     : `<li class="muted small" style="cursor:default"><span>Click <b>Sync</b> to list your MyMiniFactory library here.</span></li>`;
+  renderMmfRemind();
 }
+// Remind to sync again once the last sync is older than the Settings value. Dismissing hides it
+// until the next sync (the dismissal remembers which sync it was for).
+const MMF_REMIND_KEY = "mmfRemindDismissed";
+function renderMmfRemind() {
+  const synced = state.mmf?.synced, days = prefs.mmf_remind_days ?? 30;
+  const age = synced ? Math.floor((Date.now() / 1000 - synced) / 86400) : 0;
+  let dismissed = null;
+  try { dismissed = localStorage.getItem(MMF_REMIND_KEY); } catch {}
+  const show = !!synced && days > 0 && age >= days && dismissed !== String(synced);
+  $("#mmfRemind").classList.toggle("hidden", !show);
+  if (show) $("#mmfRemindText").textContent = `It's been ${age} days since you last synced MyMiniFactory. Sync again to pick up anything new.`;
+}
+$("#mmfRemindSync").onclick = () => $("#mmfSyncBtn").click();
+$("#mmfRemindDismiss").onclick = () => {
+  try { localStorage.setItem(MMF_REMIND_KEY, String(state.mmf?.synced)); } catch {}
+  $("#mmfRemind").classList.add("hidden");
+};
 // MyMiniFactory items are in the grid with everything else; these filter them (click again to undo).
 $("#mmfList").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-src]"); if (!li) return;
@@ -720,7 +738,7 @@ const supLabel = (s) => (s === true ? "Supported" : s === false ? "Unsupported" 
 const FORMAT_ORDER = ["stl", "lys", "ctx", "ctb", "chitubox", "3mf", "obj"];
 const fmtOf = (f) => f.ext.replace(/^\./, "").toLowerCase();
 let prefs = { preferred_format: "stl", preferred_support: "supported" };
-const loadPrefs = async () => { try { prefs = await api("/api/settings"); } catch {} };
+const loadPrefs = async () => { try { prefs = await api("/api/settings"); } catch {} renderMmfRemind(); };
 
 function countBy(files, key) {
   const n = new Map();
@@ -1217,6 +1235,7 @@ $("#settingsBtn").onclick = async () => {
   f.preferred_format.value = s.preferred_format;
   f.preferred_support.value = s.preferred_support;
   f.ignored_folders.value = s.ignored_folders;
+  f.mmf_remind_days.value = s.mmf_remind_days;
   $("#settingsErr").textContent = "";
   $("#settingsDlg").showModal();
 };
@@ -1225,10 +1244,11 @@ $("#settingsForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   const body = { prerender: f.prerender.checked ? 1 : 0, preferred_format: f.preferred_format.value, preferred_support: f.preferred_support.value, ignored_folders: f.ignored_folders.value };
-  for (const k of ["release_depth", "preview_workers", "preview_size", "max_preview_mb"]) body[k] = Number(f[k].value);
+  for (const k of ["release_depth", "preview_workers", "preview_size", "max_preview_mb", "mmf_remind_days"]) body[k] = Number(f[k].value);
   try {
     prefs = await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
     $("#settingsDlg").close();
+    renderMmfRemind();
     wasRunning = true;
   } catch (err) { $("#settingsErr").textContent = err.message; }
 });

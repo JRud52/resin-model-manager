@@ -45,6 +45,12 @@
   </aside>
   <div id="sideResize" title="Drag to resize, double-click to reset"></div>
   <main>
+    <div id="mmfRemind" class="notice hidden">
+      <span id="mmfRemindText"></span>
+      <div class="spacer"></div>
+      <button id="mmfRemindSync" class="primary">Sync now</button>
+      <button id="mmfRemindDismiss" title="Hide this until the next sync">Dismiss</button>
+    </div>
     <div class="crumb-row">
       <div id="crumbs"></div>
       <div id="activeTags" class="badges"></div>
@@ -251,6 +257,8 @@
       </select>
     </label>
     <p class="muted small">The model window shows only your preferred format and version, with buttons to switch to the others. Models that don't have it show what they do have.</p>
+    <label>Remind me to sync MyMiniFactory after (days) <input name="mmf_remind_days" type="number" min="0" max="3650" required></label>
+    <p class="muted small">Counted from the last sync. 0 turns the reminder off.</p>
     <label class="check"><input type="checkbox" name="prerender"> Render all previews in the background</label>
     <label>Background render threads <input name="preview_workers" type="number" min="1" max="8" required></label>
     <label>Preview size (pixels) <input name="preview_size" type="number" min="128" max="2048" step="64" required></label>

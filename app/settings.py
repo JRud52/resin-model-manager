@@ -16,6 +16,8 @@ FIELDS = {
     "prerender": (int(config.PRERENDER), 0, 1),
     "preview_size": (config.PREVIEW_SIZE, 128, 2048),
     "max_preview_mb": (config.MAX_PREVIEW_MB, 1, 100_000),
+    # Days after the last MyMiniFactory sync before the app reminds you to sync again; 0 = never.
+    "mmf_remind_days": (30, 0, 3650),
 }
 
 # Text settings: key -> (default, allowed values). "" means no preference.

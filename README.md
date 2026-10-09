@@ -151,7 +151,10 @@ groups them by **release** and **model**, separates **supported** and
   characters or words like "Miniatures" ("CobraMode" is "Cobra Mode"). If the
   bookmark can't reach the Resin Models window it saves `myminifactory-library.json` instead, which you
   upload in the same dialog. This relies on MyMiniFactory's website, not a
-  supported API, so a site change can break it.
+  supported API, so a site change can break it. A month after the last sync
+  the app shows a reminder to sync again, with *Sync now* and *Dismiss* (which
+  hides it until the next sync); the number of days is in Settings, and 0
+  turns it off.
 
 ![Model view](docs/model.png)
 
@@ -221,7 +224,8 @@ from the NAS folder (`Release/...` or `Creator/Release/...`; browser imports
 don't use it), your preferred file format and supported/unsupported version
 (the model window shows only those by default, with buttons to switch to the
 others; models without them show what they have), background rendering,
-render threads, preview size and the preview size limit. They are saved in the
+render threads, preview size, the preview size limit and how many days after
+the last MyMiniFactory sync to remind you to sync again. They are saved in the
 database, so they survive updates. Changing the folder setting regroups the
 library; changing the preview size re-renders the previews.
 
