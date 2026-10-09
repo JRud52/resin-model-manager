@@ -145,7 +145,13 @@ groups them by **release** and **model**, separates **supported** and
   too: in its window, with *Select models* → *Edit…* (MyMiniFactory items can be
   picked along with your models; only their tags change) or with *Tag release*. A model in your library that matches an
   item gets the item's tags too, shown with a dashed outline; they aren't
-  stored on the model, so they can't be removed there. MyMiniFactory creators are
+  stored on the model, so they can't be removed there. Items that are new in a
+  sync also get best-guess tags of their own: a genre (fantasy, scifi, cyberpunk,
+  grimdark), a race (human, elf, ork, undead, ...) and terrain, base, basing bits,
+  vehicle or bust, guessed from the item's name, its MyMiniFactory tags and the
+  genre most of the creator's other items have. Rulebooks, PDFs and other things
+  that aren't miniatures get none. Each item is tagged once, so a tag you remove
+  stays removed. MyMiniFactory creators are
   added to the Creators list, merged with
   your own creators when the names only differ in spaces, capitals, special
   characters or words like "Miniatures" ("CobraMode" is "Cobra Mode"). If the

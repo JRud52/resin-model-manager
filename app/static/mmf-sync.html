@@ -44,6 +44,7 @@ async function handle(e) {
       try {
         const res = await json("/api/mmf/import", { method: "POST", body: JSON.stringify({ items: d.items, complete: d.complete }) });
         summary = `Synced ${res.total} MyMiniFactory items, ${res.missing} of them not in your library yet.` +
+          (res.autotagged ? ` Gave ${res.autotagged} new items best-guess tags.` : "") +
           (problems ? ` Some parts couldn't be read: ${problems}` : "");
       } catch (err) { summary = "Saving failed: " + err.message; }
     }
