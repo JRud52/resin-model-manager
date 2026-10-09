@@ -135,6 +135,15 @@ def post(u, b=None):
         BASE + u, data=json.dumps(b or {}).encode(), headers={"Content-Type": "application/json"}, method="POST")))
 
 
+def autotags(want):
+    """The best-guess tags new items got from the sync; then removed, as a user might, so the
+    tag checks below see only the tags they add."""
+    got = {i["id"]: i["tags"] for i in get("/api/mmf?limit=1000")["items"] if i["tags"]}
+    assert got == want, got
+    for oid, tags in got.items():
+        post("/api/models/bulk", {"mmf_ids": [oid], "remove_tags": tags})
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
     ctx = browser.new_context(viewport={"width": 1280, "height": 860})
@@ -162,6 +171,8 @@ with sync_playwright() as p:
 
     s = get("/api/mmf/status")
     print("status:", s)
+    assert "Gave 4 new items best-guess tags" in popup.text_content("#msg")
+    autotags({1: ["fantasy", "undead"], 2: ["dragon", "fantasy"], 5: ["fantasy", "goblin"], 6: ["fantasy", "goblin"]})
     assert s["total"] == 6 and s["sources"] == {"purchase": 3, "pledge": 1, "tribe": 2}, s
     items = {m["name"]: m for m in get("/api/mmf")["items"]}
     assert items["Lich King - Supported"]["local"]["model_id"], "matches the local Lich King model"
@@ -340,6 +351,8 @@ with sync_playwright() as p:
         return win
     popup = sync()
     s = get("/api/mmf/status")
+    # Only the new items get best-guess tags; the ones removed above stay removed.
+    autotags({11: ["fantasy", "ork"], 12: ["fantasy", "human"]})
     assert s["total"] == 7 and s["sources"] == {"purchase": 2, "tribe": 2, "group": 1, "mmfplus": 1, "free": 1, "pledge": 1}, s
     items = {m["id"]: m for m in get("/api/mmf")["items"]}
     assert items[5]["sources"] == [{"source": "tribe", "collection": "MiniForge's Tribe · 09/2023 | tier: Elders"}], items[5]

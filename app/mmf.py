@@ -13,7 +13,7 @@ import re
 import time
 import unicodedata
 
-from . import classify, db
+from . import autotag, classify, db
 
 SOURCES = ("purchase", "pledge", "tribe", "group", "mmfplus", "free")
 MAX_ITEMS = 50_000
@@ -117,7 +117,59 @@ def import_library(payload: dict) -> dict:
         c.execute("DELETE FROM mmf_items WHERE id NOT IN (SELECT item_id FROM mmf_links)")
         c.execute("INSERT INTO settings(key, value) VALUES('mmf_synced', ?) "
                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(now),))
-    return {"items": len(rows), **status()}
+        tagged = _autotag(c, links)
+    return {"items": len(rows), "autotagged": tagged, **status()}
+
+
+def _autotag(c, links: set) -> int:
+    """Best-guess tags (autotag.py) on items no sync has tagged before, as tags of their own that
+    the user can remove. The genre and race hints come from the tags the creator's other items
+    and local models, and the release's other items, already have. Returns the items tagged."""
+    new = [r for r in c.execute("SELECT id, name, creator, tags FROM mmf_items WHERE id NOT IN "
+                                "(SELECT item_id FROM mmf_autotagged)")]
+    if not new:
+        return 0
+    new_ids = {r["id"] for r in new}
+    names = creator_names()
+    own = own_tags()
+    by_creator: dict[str, list[list[str]]] = {}
+    by_collection: dict[str, list[list[str]]] = {}
+    collections: dict[int, list[str]] = {}
+    for oid, _, coll in links:
+        if coll:
+            collections.setdefault(oid, []).append(coll)
+    for r in c.execute("SELECT id, creator, tags FROM mmf_items"):
+        if r["id"] in new_ids:
+            continue
+        tags = json.loads(r["tags"] or "[]") + own.get(r["id"], [])
+        by_creator.setdefault(creator_key(display_creator(r["creator"], names)), []).append(tags)
+        for coll in collections.get(r["id"], []):
+            by_collection.setdefault(coll.casefold(), []).append(tags)
+    local: dict[str, tuple[str, list[str]]] = {}
+    for r in c.execute("SELECT f.model_id, MAX(f.creator) creator, t.tag FROM model_tags t "
+                       "JOIN files f ON f.model_id = t.model_id AND f.hidden = 0 GROUP BY f.model_id, t.tag"):
+        local.setdefault(r["model_id"], (r["creator"], []))[1].append(r["tag"])
+    for creator, tags in local.values():
+        if creator:
+            by_creator.setdefault(creator_key(display_creator(creator, names)), []).append(tags)
+    # Spelled the way the library already spells them ("Fantasy" if that's what's there).
+    spelling = {r[0].casefold(): r[0] for r in c.execute(
+        "SELECT DISTINCT tag FROM mmf_item_tags UNION ALL SELECT DISTINCT tag FROM model_tags")}
+    tagged = 0
+    for r in new:
+        site = json.loads(r["tags"] or "[]")
+        mine = creator_key(display_creator(r["creator"], names)) if r["creator"] else ""
+        siblings = [t for coll in collections.get(r["id"], []) for t in by_collection.get(coll.casefold(), [])]
+        genre = (autotag.genre_hint(siblings) if len(siblings) >= 2 else "") or \
+            autotag.genre_hint(by_creator.get(mine, []) if mine else [])
+        race = autotag.race_hint(by_creator.get(mine, [])) if mine else ""
+        have = {t.casefold() for t in site + own.get(r["id"], [])}
+        add = [spelling.get(t, t) for t in autotag.guess(r["name"], site, " ".join(collections.get(r["id"], [])), genre, race)
+               if t.casefold() not in have]
+        c.executemany("INSERT OR IGNORE INTO mmf_item_tags(item_id, tag) VALUES (?,?)", [(r["id"], t) for t in add])
+        tagged += bool(add)
+    c.executemany("INSERT OR IGNORE INTO mmf_autotagged(item_id) VALUES (?)", [(i,) for i in new_ids])
+    return tagged
 
 
 def clear():

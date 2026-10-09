@@ -147,6 +147,12 @@ CREATE TABLE IF NOT EXISTS mmf_item_tags (
     PRIMARY KEY (item_id, tag)
 );
 
+-- MyMiniFactory items that have had their best-guess tags (autotag.py), so a later sync
+-- doesn't add them again, even to a tag the user has since removed.
+CREATE TABLE IF NOT EXISTS mmf_autotagged (
+    item_id INTEGER PRIMARY KEY
+);
+
 CREATE TABLE IF NOT EXISTS mmf_links (
     item_id INTEGER NOT NULL,
     source TEXT NOT NULL,
@@ -218,4 +224,8 @@ def init():
     if not c.execute("SELECT 1 FROM settings WHERE key='mmf_gallery_v'").fetchone():
         c.execute("UPDATE mmf_items SET gallery=''")
         c.execute("INSERT INTO settings(key, value) VALUES('mmf_gallery_v', '2')")
+    # Items synced before 0.13 were tagged by hand; only items new to a sync get best-guess tags.
+    if not c.execute("SELECT 1 FROM settings WHERE key='mmf_autotag_v'").fetchone():
+        c.execute("INSERT OR IGNORE INTO mmf_autotagged(item_id) SELECT id FROM mmf_items")
+        c.execute("INSERT INTO settings(key, value) VALUES('mmf_autotag_v', '1')")
     c.commit()
