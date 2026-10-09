@@ -397,11 +397,20 @@ class TagsIn(BaseModel):
     release: Optional[str] = None  # for the bulk release endpoint
 
 
-def _apply_tags(model_ids: list[str], t: TagsIn):
+def _spelled(tags: list[str]) -> list[str]:
+    """Reuse the spelling a tag already has, so "Sci-fi" and "sci-fi" stay one tag."""
     c = db.conn()
-    add, remove = _clean_tags(t.add), _clean_tags(t.remove)
-    # Reuse the spelling a tag already has, so "Sci-fi" and "sci-fi" stay one tag.
-    add = [(c.execute("SELECT tag FROM model_tags WHERE tag=? LIMIT 1", (a,)).fetchone() or [a])[0] for a in add]
+    return [(c.execute("SELECT tag FROM model_tags WHERE tag=? COLLATE NOCASE UNION ALL "
+                       "SELECT tag FROM mmf_item_tags WHERE tag=? COLLATE NOCASE LIMIT 1", (a, a)).fetchone() or [a])[0]
+            for a in tags]
+
+
+def _apply_tags(model_ids: list[str], t: TagsIn, mmf_ids: list[int] = ()):
+    """Tags on local models and on MyMiniFactory items (their own tags in the app)."""
+    c = db.conn()
+    add, remove = _spelled(_clean_tags(t.add)), _clean_tags(t.remove)
+    if mmf_ids:
+        mmf.set_tags(list(mmf_ids), add, remove)
     for mid in model_ids:
         for tag in add:
             c.execute("INSERT OR IGNORE INTO model_tags(model_id, tag) VALUES (?,?)", (mid, tag))
@@ -435,7 +444,7 @@ def all_tags(release: Optional[str] = None):
                 for t in tags:
                     add(t, model_id)
     for d in mmf.grid_items(release=release):
-        for t in d["tags"]:
+        for t in d["tags"] + d["mmf_tags"]:
             add(t, ("mmf", d["id"]))
     return [{"tag": g["tag"], "models": len(g["ids"])} for g in sorted(groups.values(), key=lambda g: g["tag"].casefold())]
 
@@ -448,13 +457,14 @@ def model_tags(model_id: str, t: TagsIn):
 
 @app.post("/api/releases/tags")
 def release_tags(t: TagsIn):
-    """Add or remove tags on every model in a release."""
+    """Add or remove tags on every model in a release, and on its MyMiniFactory items not in the library."""
     if t.release is None:
         raise HTTPException(400, "release is required")
     ids = [r[0] for r in db.conn().execute(
         "SELECT DISTINCT model_id FROM files WHERE release=? AND hidden=0", (t.release,))]
-    _apply_tags(ids, t)
-    return {"models": len(ids)}
+    online = [d["id"] for d in mmf.grid_items(release=t.release)]
+    _apply_tags(ids, t, online)
+    return {"models": len(ids) + len(online)}
 
 
 # ---------------------------------------------------------------- creators
@@ -650,7 +660,8 @@ def delete_map(map_id: int):
 # ---------------------------------------------------------------- bulk edit
 
 class BulkIn(BaseModel):
-    model_ids: list[str]
+    model_ids: list[str] = []
+    mmf_ids: list[int] = []         # MyMiniFactory items: only the tags apply
     add_tags: list[str] = []
     remove_tags: list[str] = []
     release: Optional[str] = None   # move them to this release
@@ -662,17 +673,19 @@ class BulkIn(BaseModel):
 @app.post("/api/models/bulk")
 def bulk_edit(b: BulkIn):
     """Edit several models at once (tags first, so they move with the models)."""
-    if not b.model_ids:
+    if not b.model_ids and not b.mmf_ids:
         raise HTTPException(400, "Pick some models")
     release = " ".join(b.release.split()) if b.release is not None else None
     if b.supported not in (None, 1, 0, -1):
         raise HTTPException(400, "Bad support value")
-    _apply_tags(b.model_ids, TagsIn(add=b.add_tags, remove=b.remove_tags))
+    _apply_tags(b.model_ids, TagsIn(add=b.add_tags, remove=b.remove_tags), b.mmf_ids)
+    if not b.model_ids:
+        return {"models": 0, "mmf": len(b.mmf_ids), "releases": []}
     releases = library.bulk_edit(b.model_ids, release or None, b.supported, 1 if b.hidden else None)
     if b.creator is not None and releases:
         _set_creator(releases, b.creator)
         library.reclassify()
-    return {"models": len(b.model_ids), "releases": releases}
+    return {"models": len(b.model_ids), "mmf": len(b.mmf_ids), "releases": releases}
 
 
 # ---------------------------------------------------------------- combined models
@@ -768,6 +781,15 @@ def mmf_item(oid: int):
 
 class MmfQueueIn(BaseModel):
     queued: bool = True
+
+
+@app.post("/api/mmf/{oid}/tags")
+def mmf_item_tags(oid: int, t: TagsIn):
+    """The item's own tags, added in the app (its MyMiniFactory tags stay as they are)."""
+    if not db.conn().execute("SELECT 1 FROM mmf_items WHERE id=?", (oid,)).fetchone():
+        raise HTTPException(404)
+    _apply_tags([], t, [oid])
+    return {"tags": mmf.own_tags([oid]).get(oid, [])}
 
 
 @app.post("/api/mmf/{oid}/queue")

@@ -141,7 +141,9 @@ groups them by **release** and **model**, separates **supported** and
   filters them: *Only MyMiniFactory*, *Not in your library* or *Hide
   MyMiniFactory* (click again to show everything). Their MyMiniFactory tags
   come along: they show on the items and work in the tag filter and in
-  `tag:` searches like your own tags. A model in your library that matches an
+  `tag:` searches like your own tags. You can add tags of your own to an item
+  too: in its window, with *Select models* → *Edit…* (MyMiniFactory items can be
+  picked along with your models; only their tags change) or with *Tag release*. A model in your library that matches an
   item gets the item's tags too, shown with a dashed outline; they aren't
   stored on the model, so they can't be removed there. MyMiniFactory creators are
   added to the Creators list, merged with

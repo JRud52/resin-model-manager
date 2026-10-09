@@ -139,6 +139,14 @@ CREATE TABLE IF NOT EXISTS mmf_items (
 );
 -- Where each item is in the MyMiniFactory library: source purchase | pledge | tribe,
 -- collection the campaign or tribe name ('' for plain purchases).
+-- Tags added in the app to MyMiniFactory items (their own tags from the site are in mmf_items.tags).
+-- Kept when the item drops out of a sync, so they come back with it.
+CREATE TABLE IF NOT EXISTS mmf_item_tags (
+    item_id INTEGER NOT NULL,
+    tag TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (item_id, tag)
+);
+
 CREATE TABLE IF NOT EXISTS mmf_links (
     item_id INTEGER NOT NULL,
     source TEXT NOT NULL,

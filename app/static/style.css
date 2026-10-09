@@ -225,7 +225,7 @@ body.sync-page main { max-width: 560px; margin: 10vh auto; padding: 16px; }
 body.sync-page a { color: var(--accent); }
 
 /* MyMiniFactory items in the model window */
-#modelDlg.mmf-mode #mMapBtn, #modelDlg.mmf-mode #mEditBtn, #modelDlg.mmf-mode .tag-editor,
+#modelDlg.mmf-mode #mMapBtn, #modelDlg.mmf-mode #mEditBtn,
 #modelDlg.mmf-mode #view3dBtn, #modelDlg.mmf-mode #mFilter { display: none; }
 .mmf-info { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
 .mmf-info p { margin: 0; }
@@ -236,3 +236,4 @@ body.sync-page a { color: var(--accent); }
 a.button-like { color: inherit; text-decoration: none; }
 a.button-like.primary { background: var(--accent); border-color: var(--accent); color: #08131d; font-weight: 600; }
 .badge.tag.from-mmf { border-style: dashed; }
+#bulkMmfNote:empty { display: none; }
