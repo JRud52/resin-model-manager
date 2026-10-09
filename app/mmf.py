@@ -282,13 +282,15 @@ def _search(q: str) -> tuple[str, list]:
     where, args = [], []
     for word in q.split():
         if word.lower().startswith("tag:") and len(word) > 4:  # exact tag search
-            where.append("EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ? COLLATE NOCASE)")
-            args.append(word[4:])
+            where.append("(EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ? COLLATE NOCASE) "
+                         "OR i.id IN (SELECT item_id FROM mmf_item_tags WHERE tag = ? COLLATE NOCASE))")
+            args += [word[4:]] * 2
             continue
         where.append("(i.name LIKE ? OR i.creator LIKE ? OR i.id IN "
                      "(SELECT item_id FROM mmf_links WHERE collection LIKE ?) "
-                     "OR EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value LIKE ?))")
-        args += [f"%{word}%"] * 4
+                     "OR EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value LIKE ?) "
+                     "OR i.id IN (SELECT item_id FROM mmf_item_tags WHERE tag LIKE ?))")
+        args += [f"%{word}%"] * 5
     return ("WHERE " + " AND ".join(where) if where else ""), args
 
 
@@ -304,6 +306,7 @@ def _matched_items(q: str = "", creator: str | None = None) -> list[dict]:
     rows = c.execute(f"""SELECT i.* FROM mmf_items i {where}
                          ORDER BY i.creator COLLATE NOCASE, i.name COLLATE NOCASE""", args).fetchall()
     names = creator_names()
+    own = own_tags()
     if creator is not None:
         key = creator_key(creator)
         rows = [r for r in rows if creator_key(display_creator(r["creator"], names)) == key]
@@ -313,7 +316,7 @@ def _matched_items(q: str = "", creator: str | None = None) -> list[dict]:
     index = _local_index()
     out = []
     for r in rows:
-        d = _item(r, names)
+        d = _item(r, names, own)
         d["sources"] = link_map.get(r["id"], [])
         d["local"] = _match(r["name"], d["creator"], index)
         d["release"] = _release_of(d)
@@ -344,7 +347,7 @@ def grid_items(q: str = "", creator: str | None = None, release: str | None = No
         d["grid_release"] = d["local"]["release"] if d["local"] else d["release"]
         if release is not None and d["grid_release"].casefold() != release.casefold():
             continue
-        if tags and not has_tags(d["tags"], tags):
+        if tags and not has_tags(d["tags"] + d["mmf_tags"], tags):
             continue
         d["mmf"] = True
         out.append(d)
@@ -363,14 +366,43 @@ def releases(q: str = "", creator: str | None = None, source: str = "", tags: li
                 "mmf": g["mmf"]} for k, g in groups.items()}
 
 
-def _item(r, names: dict[str, str] | None = None) -> dict:
+def own_tags(ids: list[int] | None = None) -> dict[int, list[str]]:
+    """item id -> the tags added to it in the app."""
+    out: dict[int, list[str]] = {}
+    sql = "SELECT item_id, tag FROM mmf_item_tags"
+    if ids is not None:
+        sql += f" WHERE item_id IN ({','.join('?' * len(ids))})"
+    for r in db.conn().execute(sql + " ORDER BY tag COLLATE NOCASE", ids or []):
+        out.setdefault(r["item_id"], []).append(r["tag"])
+    return out
+
+
+def set_tags(ids: list[int], add: list[str], remove: list[str]) -> int:
+    """Add and remove the app's own tags on items; returns how many items exist. A tag the item
+    already has from MyMiniFactory isn't added again."""
+    c = db.conn()
+    site = {r["id"]: {t.casefold() for t in json.loads(r["tags"] or "[]")} for r in c.execute(
+        f"SELECT id, tags FROM mmf_items WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
+    with c:
+        for oid in site:
+            for t in remove:
+                c.execute("DELETE FROM mmf_item_tags WHERE item_id=? AND tag=? COLLATE NOCASE", (oid, t))
+            for t in add:
+                if t.casefold() not in site[oid] and not c.execute(
+                        "SELECT 1 FROM mmf_item_tags WHERE item_id=? AND tag=? COLLATE NOCASE", (oid, t)).fetchone():
+                    c.execute("INSERT INTO mmf_item_tags(item_id, tag) VALUES (?,?)", (oid, t))
+    return len(site)
+
+
+def _item(r, names: dict[str, str] | None = None, own: dict[int, list[str]] | None = None) -> dict:
     d = dict(r)
     d["creator"] = display_creator(d["creator"], creator_names() if names is None else names)
     gallery = json.loads(d.pop("gallery", "") or "[]")
     d["images"] = gallery or json.loads(d.get("images") or "[]") or ([d["image"]] if d.get("image") else [])
     d["downloads"] = len(json.loads(d.get("downloads") or "[]"))
     d["queued"] = bool(d.get("queued"))
-    d["tags"] = json.loads(d.get("tags") or "[]")
+    d["mmf_tags"] = json.loads(d.pop("tags", "") or "[]")  # from MyMiniFactory
+    d["tags"] = (own_tags([d["id"]]) if own is None else own).get(d["id"], [])  # added in the app
     return d
 
 
@@ -388,9 +420,9 @@ def local_tags() -> dict[str, list[str]]:
         out: dict[str, list[str]] = {}
         for d in _matched_items():
             mid = (d["local"] or {}).get("model_id")
-            if mid and d["tags"]:
+            if mid and d["mmf_tags"]:
                 have = out.setdefault(mid, [])
-                have += [t for t in d["tags"] if t.casefold() not in {x.casefold() for x in have}]
+                have += [t for t in d["mmf_tags"] if t.casefold() not in {x.casefold() for x in have}]
         _local_tags_cache = (sig, out)
     return _local_tags_cache[1]
 
@@ -400,8 +432,9 @@ def creators(q: str = "", tags: list[str] = ()) -> dict[str, dict]:
     where, args = _search(q)
     spellings: dict[str, dict[str, int]] = {}
     renamed = creator_names()
-    for r in db.conn().execute(f"SELECT i.creator, i.tags FROM mmf_items i {where}", args):
-        if tags and not has_tags(json.loads(r["tags"] or "[]"), tags):
+    own = own_tags() if tags else {}
+    for r in db.conn().execute(f"SELECT i.id, i.creator, i.tags FROM mmf_items i {where}", args):
+        if tags and not has_tags(json.loads(r["tags"] or "[]") + own.get(r["id"], []), tags):
             continue
         shown = display_creator(r["creator"], renamed)
         names = spellings.setdefault(creator_key(shown), {})

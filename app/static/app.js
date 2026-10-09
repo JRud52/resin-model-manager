@@ -94,6 +94,9 @@ function thumb(m) {
   return `<img loading="lazy" src="${src}" alt="${esc(m.model)}" class="${m.cover_image ? "photo" : ""}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">`;
 }
 
+// Grid entries are local models (id) and MyMiniFactory items (mmf:id).
+const pickKey = (m) => (m.mmf ? `mmf:${m.id}` : m.id);
+
 function card(m) {
   if (m.mmf) return mmfCard(m);
   const b = [];
@@ -139,8 +142,8 @@ async function loadModels(append = false) {
   $("#releaseCreatorBtn").textContent = state.release === null ? "Set creator for several" : "Set creator";
   $("#renameCreatorBtn").classList.toggle("hidden", !state.creator || state.release !== null);
   $("#activeTags").innerHTML = state.tags.map((t) => `<span class="badge tag on" data-tag="${esc(t)}" title="Remove filter">${esc(t)} ✕</span>`).join("");
-  $("#releaseTagBtn").classList.toggle("hidden", onlyMmf || state.release === null);
-  $("#combineBtn").classList.toggle("hidden", state.items.filter((m) => !m.mmf).length < 2 || !!state.picked);
+  $("#releaseTagBtn").classList.toggle("hidden", state.release === null);
+  $("#combineBtn").classList.toggle("hidden", state.total < 2 || !!state.picked);
   $("#modelList").innerHTML = [...new Set(state.items.filter((m) => !m.mmf).map((m) => m.model))].map((m) => `<option value="${esc(m)}">`).join("");
   const empty = $("#empty");
   if (!state.total) {
@@ -220,11 +223,12 @@ $("#more").onclick = () => { state.offset += PAGE; loadModels(true); };
 $("#grid").addEventListener("click", (e) => {
   if (e.target.closest("a")) return;
   const c = e.target.closest(".card"); if (!c) return;
-  if (c.dataset.mmf) { openMmfItem(state.items.find((m) => m.mmf && String(m.id) === c.dataset.mmf)); return; }
-  if (!state.picked) { openModel(c.dataset.id); return; }
-  const m = state.items.find((x) => x.id === c.dataset.id);
-  if (state.picked.has(m.id)) state.picked.delete(m.id); else state.picked.set(m.id, m);
-  c.classList.toggle("picked", state.picked.has(c.dataset.id));
+  const m = c.dataset.mmf ? state.items.find((x) => x.mmf && String(x.id) === c.dataset.mmf) : state.items.find((x) => x.id === c.dataset.id);
+  if (!state.picked) { if (m?.mmf) openMmfItem(m); else openModel(c.dataset.id); return; }
+  if (!m) return;
+  const key = pickKey(m);
+  if (state.picked.has(key)) state.picked.delete(key); else state.picked.set(key, m);
+  c.classList.toggle("picked", state.picked.has(key));
   showPicked();
 });
 
@@ -237,15 +241,17 @@ function endPicking() {
   $("#grid").classList.remove("selecting");
   $("#selectBar").classList.add("hidden");
   document.querySelectorAll("#grid .card.picked").forEach((c) => c.classList.remove("picked"));
-  $("#combineBtn").classList.toggle("hidden", state.items.filter((m) => !m.mmf).length < 2);
+  $("#combineBtn").classList.toggle("hidden", state.total < 2);
 }
 const pickedReleases = () => new Set([...state.picked.values()].map((m) => m.release));
 function showPicked() {
   const n = state.picked.size;
   $("#selectCount").textContent = n ? `${n} model${n === 1 ? "" : "s"} picked` : "Click models to pick them";
   $("#bulkGo").disabled = !n;
-  // Only models of one release can become one model.
-  $("#combineGo").disabled = n < 2 || pickedReleases().size > 1;
+  // Only models of one release can become one model; MyMiniFactory items can only be tagged.
+  const online = [...state.picked.values()].some((m) => m.mmf);
+  $("#combineGo").disabled = n < 2 || pickedReleases().size > 1 || online;
+  $("#combineGo").title = online ? "MyMiniFactory items can't be combined" : "";
 }
 $("#combineBtn").onclick = () => {
   state.picked = new Map();
@@ -256,8 +262,8 @@ $("#combineBtn").onclick = () => {
 };
 $("#selectCancel").onclick = endPicking;
 $("#selectAll").onclick = () => {
-  state.items.filter((m) => !m.mmf).forEach((m) => state.picked.set(m.id, m));
-  document.querySelectorAll("#grid .card:not(.mmf)").forEach((c) => c.classList.add("picked"));
+  state.items.forEach((m) => state.picked.set(pickKey(m), m));
+  document.querySelectorAll("#grid .card").forEach((c) => c.classList.add("picked"));
   showPicked();
 };
 $("#combineGo").onclick = () => {
@@ -273,7 +279,9 @@ $("#bulkGo").onclick = () => {
   const form = $("#bulkDlg form");
   form.reset();
   const n = state.picked.size, rels = pickedReleases();
+  const online = [...state.picked.values()].filter((m) => m.mmf).length;
   $("#bulkTitle").textContent = `Edit ${n} model${n === 1 ? "" : "s"}` + (rels.size > 1 ? ` in ${rels.size} releases` : "");
+  $("#bulkMmfNote").textContent = online ? `${online} of them ${online === 1 ? "is a MyMiniFactory item" : "are MyMiniFactory items"}: only the tags change for ${online === 1 ? "it" : "those"}.` : "";
   $("#bulkErr").textContent = "";
   $("#bulkDlg").showModal();
 };
@@ -282,7 +290,9 @@ $("#bulkDlg form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   const list = (v) => v.split(",").map((t) => t.trim()).filter(Boolean);
-  const body = { model_ids: [...state.picked.keys()], add_tags: list(f.add.value), remove_tags: list(f.remove.value) };
+  const picked = [...state.picked.values()];
+  const body = { model_ids: picked.filter((m) => !m.mmf).map((m) => m.id), mmf_ids: picked.filter((m) => m.mmf).map((m) => m.id),
+    add_tags: list(f.add.value), remove_tags: list(f.remove.value) };
   if (f.release.value.trim()) body.release = f.release.value.trim();
   if (f.clearCreator.checked) body.creator = "";
   else if (f.creator.value.trim()) body.creator = f.creator.value.trim();
@@ -345,12 +355,13 @@ function mmfTagBadges(tags, cls = "") {
 function mmfCard(m) {
   const b = [m.local ? `<span class="badge sup">in your library</span>` : m.queued ? `<span class="badge tag">waiting to download</span>` : `<span class="badge unsup">not downloaded</span>`];
   [...new Set(m.sources.map((s) => s.source))].forEach((s) => b.push(`<span class="badge">${MMF_SOURCES[s] || esc(s)}</span>`));
-  b.push(...mmfTagBadges(m.tags || []));
+  (m.tags || []).forEach((t) => b.push(`<span class="badge tag">${esc(t)}</span>`));
+  b.push(...mmfTagBadges(m.mmf_tags || [], "from-mmf"));
   const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))].join(", ");
   const img = m.image ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(m.image)}" alt="${esc(m.name)}" class="photo"
       onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">` : `<div class="ph">No preview</div>`;
   const sub = [state.release === null && m.grid_release, m.creator].filter(Boolean).join(" · ") || "MyMiniFactory";
-  return `<div class="card mmf" data-mmf="${m.id}" title="${esc(m.local ? `In your library: ${m.local.release}` : `On MyMiniFactory${where ? `: ${where}` : ""}`)}">
+  return `<div class="card mmf ${state.picked?.has(pickKey(m)) ? "picked" : ""}" data-mmf="${m.id}" title="${esc(m.local ? `In your library: ${m.local.release}` : `On MyMiniFactory${where ? `: ${where}` : ""}`)}">
     <div class="thumb">${img}</div>
     <div class="meta">
       <div class="title" title="${esc(m.name)}">${esc(m.name)}</div>
@@ -375,6 +386,8 @@ async function openMmfModel(id) {
   $("#mRelease").textContent = [m.creator, ...where].filter(Boolean).join(" / ") + " · MyMiniFactory";
   $("#editForm").classList.add("hidden");
   $("#mFilter").innerHTML = "";
+  $("#mTagInput").value = "";
+  renderModelTags();
   renderMmfModel();
   if (m.images.length) showMmfPicture(0); else { $("#mPreview").style.visibility = "hidden"; $("#mPreviewName").textContent = "No images"; }
   if (!dlg.open) dlg.showModal();
@@ -392,7 +405,7 @@ function renderMmfModel() {
        <div class="row"><a class="button-like primary" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Download on MyMiniFactory ↗</a>
        <button id="mmfImport">Import the download…</button></div>`;
   $("#mFiles").innerHTML = `<div class="mmf-info">
-      <div class="badges">${kinds.map((k) => `<span class="badge">${esc(k)}</span>`).join("")}${m.tags.map((t) => `<span class="badge tag">${esc(t)}</span>`).join("")}
+      <div class="badges">${kinds.map((k) => `<span class="badge">${esc(k)}</span>`).join("")}
         <a class="badge link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Open on MyMiniFactory ↗</a></div>
       ${dl}
     </div>
@@ -485,14 +498,18 @@ $("#activeTags").addEventListener("click", (e) => { const b = e.target.closest("
 
 const splitTags = (s) => s.split(",").map((t) => t.trim()).filter(Boolean);
 
+// The model window's tags belong to a local model, or in MyMiniFactory mode to the item.
+const tagged = () => ($("#modelDlg").classList.contains("mmf-mode") ? state.mmfItem : state.model);
 function renderModelTags() {
-  $("#mTags").innerHTML = state.model.tags.map((t) => `<span class="badge tag">${esc(t)}<button data-rm="${esc(t)}" title="Remove tag">✕</button></span>`).join("") +
-    (state.model.mmf_tags || []).filter((t) => !state.model.tags.some((x) => x.toLowerCase() === t.toLowerCase()))
+  const m = tagged();
+  $("#mTags").innerHTML = m.tags.map((t) => `<span class="badge tag">${esc(t)}<button data-rm="${esc(t)}" title="Remove tag">✕</button></span>`).join("") +
+    (m.mmf_tags || []).filter((t) => !m.tags.some((x) => x.toLowerCase() === t.toLowerCase()))
       .map((t) => `<span class="badge tag from-mmf" title="Tag on MyMiniFactory">${esc(t)}</span>`).join("");
 }
 async function changeModelTags(add, remove) {
-  const r = await api(`/api/models/${state.model.id}/tags`, { method: "POST", body: JSON.stringify({ add, remove }) });
-  state.model.tags = r.tags;
+  const m = tagged();
+  const r = await api(m === state.mmfItem ? `/api/mmf/${m.id}/tags` : `/api/models/${m.id}/tags`, { method: "POST", body: JSON.stringify({ add, remove }) });
+  m.tags = r.tags;
   renderModelTags();
   state.dirty = true;
 }
@@ -506,7 +523,7 @@ $("#mTagInput").addEventListener("keydown", (e) => {
 });
 $("#mTagInput").addEventListener("change", (e) => {  // picking from the suggestion list
   const tags = splitTags(e.target.value);
-  if (tags.length && state.model) { e.target.value = ""; changeModelTags(tags, []); }
+  if (tags.length && tagged()) { e.target.value = ""; changeModelTags(tags, []); }
 });
 
 $("#releaseTagBtn").onclick = () => {

@@ -353,7 +353,8 @@ with sync_playwright() as p:
     assert items[1]["local"], "still matches the local Lich King"
 
     # Tags from MyMiniFactory: on the items, and on the local models they match (not editable there).
-    assert items[5]["tags"] == ["Goblin", "Fantasy"] and items[11]["tags"] == ["orc", "Warhammer"], (items[5], items[11])
+    assert items[5]["mmf_tags"] == ["Goblin", "Fantasy"] and items[11]["mmf_tags"] == ["orc", "Warhammer"], (items[5], items[11])
+    assert items[11]["tags"] == [], "no tags of its own yet"
     boss = get("/api/models?q=goblin%20boss&source=local")["items"][0]
     assert boss["mmf_tags"] == ["Goblin", "Fantasy"] and get(f"/api/models/{boss['id']}")["mmf_tags"] == ["Goblin", "Fantasy"], boss
     assert boss["id"] in [m["id"] for m in get("/api/models?tags=fantasy")["items"]]
@@ -367,6 +368,17 @@ with sync_playwright() as p:
     assert [t["tag"] for t in get("/api/tags")].count("Goblin") == 1
     assert {r["release"] for r in get("/api/releases?tags=orc")} == {"38. OPR April 2023 Rewards"}
     assert {c["creator"]: c["mmf"] for c in get("/api/creators?tags=orc")} == {"Orc Works": 1}
+    # Items take tags of their own, one at a time, in bulk or for their whole release.
+    assert post("/api/mmf/11/tags", {"add": ["Greenskin", "warhammer"]})["tags"] == ["Greenskin"], "a MyMiniFactory tag isn't added twice"
+    assert post("/api/models/bulk", {"mmf_ids": [11, 12], "add_tags": ["painted"]})["mmf"] == 2
+    assert {m["id"] for m in get("/api/models?tags=painted&source=mmf")["items"]} == {11, 12}
+    post("/api/models/bulk", {"mmf_ids": [12], "remove_tags": ["painted"]})
+    assert get("/api/mmf/12")["tags"] == [] and get("/api/mmf/11")["tags"] == ["Greenskin", "painted"]
+    assert post("/api/releases/tags", {"release": "38. OPR April 2023 Rewards", "add": ["horde"]})["models"] == 1
+    assert get("/api/mmf/11")["tags"] == ["Greenskin", "horde", "painted"]
+    assert [m["id"] for m in get("/api/models?q=tag:horde")["items"]] == [11]
+    assert {t["tag"].casefold(): t["models"] for t in get("/api/tags")}["greenskin"] == 1
+    post("/api/models/bulk", {"mmf_ids": [11], "remove_tags": ["Greenskin", "horde", "painted"]})
     app.reload()
     app.wait_for_selector("#tagList [data-tag]")
     if app.locator(".side-filter input[data-for='tagList']").is_visible():  # long lists show the first few
@@ -374,8 +386,33 @@ with sync_playwright() as p:
     app.click("#tagList [data-tag='orc']")
     app.wait_for_function("document.querySelectorAll('#grid .card').length === 1")
     assert app.locator("#grid .card.mmf[data-mmf='11'] .badge.tag").count() == 2
+    # The tag editor works in an item's window too.
+    app.click("#grid .card.mmf[data-mmf='11']")
+    app.wait_for_selector("#modelDlg.mmf-mode[open]")
+    assert app.locator("#mTags .badge.tag.from-mmf").count() == 2
+    app.fill("#mTagInput", "Horde")
+    app.press("#mTagInput", "Enter")
+    app.wait_for_selector("#mTags .badge.tag:not(.from-mmf) [data-rm='Horde']")
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-tags.png")
+    app.keyboard.press("Escape")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='11'] .badge.tag:not(.from-mmf)")
+    assert get("/api/mmf/11")["tags"] == ["Horde"]
+    # And they can be picked with local models for Edit….
+    app.click("#activeTags [data-tag='orc']")
+    app.wait_for_function("document.querySelectorAll('#grid .card:not(.mmf)').length > 0")
+    app.click("#combineBtn")
+    app.click("#grid .card.mmf[data-mmf='11']")
+    app.click("#grid .card:not(.mmf)")
+    assert app.locator("#grid .card.picked").count() == 2 and app.locator("#modelDlg[open]").count() == 0
+    assert app.locator("#combineGo").is_disabled()
+    app.click("#bulkGo")
+    assert "1 of them is a MyMiniFactory item" in app.inner_text("#bulkMmfNote")
+    app.fill("#bulkDlg input[name='add']", "batch")
+    app.click("#bulkDlg button[value='save']")
+    app.wait_for_selector("#bulkDlg", state="hidden")
+    assert get("/api/mmf/11")["tags"] == ["batch", "Horde"]
+    assert get("/api/models?tags=batch")["total"] == 2
 
     browser.close()
 
