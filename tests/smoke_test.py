@@ -11,8 +11,11 @@ import time
 import urllib.request
 from pathlib import Path
 
+from login import login
+
 BASE = sys.argv[1].rstrip("/")
 SRC = Path(sys.argv[2])
+login(BASE)
 
 
 def get(u):

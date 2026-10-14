@@ -5,14 +5,14 @@ import mimetypes
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Union
+from typing import Annotated, Optional, Union
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, archives, classify, config, db, library, mmf, settings
+from . import __version__, archives, auth, classify, config, db, library, mmf, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = FastAPI(title="Resin Model Manager", version=__version__)
@@ -37,20 +37,90 @@ def _sup(v):
     return None if v is None else bool(v)
 
 
+# ---------------------------------------------------------------- who is asking
+
+def _viewer(request: Request) -> auth.Viewer:
+    v = getattr(request.state, "viewer", None)
+    if v is None:
+        raise HTTPException(401, "Log in first")
+    return v
+
+
+def _admin(v: Annotated[auth.Viewer, Depends(_viewer)]) -> auth.Viewer:
+    if not v.is_admin:
+        raise HTTPException(403, "Only an admin can do that")
+    return v
+
+
+Me = Annotated[auth.Viewer, Depends(_viewer)]
+Admin = Annotated[auth.Viewer, Depends(_admin)]
+# scope: '' = every model the viewer may see, 'mine' = only their own
+SCOPES = ("", "mine")
+
+
+def _vis(v: auth.Viewer, scope: str = "") -> tuple[str, list]:
+    """SQL (on files or images) for what v may see: their own and public models, or everything
+    for an admin in admin mode; with scope 'mine' only their own."""
+    if scope not in SCOPES:
+        raise HTTPException(400, "unknown scope")
+    if scope == "mine":
+        return "owner = ?", [v.id]
+    if v.sees_all:
+        return "1", []
+    return "(owner = ? OR public = 1)", [v.id]
+
+
+def _mmf_shown(v: auth.Viewer, scope: str = "") -> bool:
+    """The MyMiniFactory library is the main admin's; admins see it."""
+    return v.is_admin and (scope != "mine" or v.id == db.MAIN_ADMIN)
+
+
+def _visible(table: str, row_id: int, v: auth.Viewer):
+    where, args = _vis(v)
+    r = db.conn().execute(f"SELECT * FROM {table} WHERE id=? AND {where}", (row_id, *args)).fetchone()
+    if not r:
+        raise HTTPException(404)
+    return r
+
+
+def _model_owner(model_id: str) -> Optional[int]:
+    r = db.conn().execute("SELECT MIN(owner) FROM files WHERE model_id=?", (model_id,)).fetchone()
+    return r[0] if r else None
+
+
+def _check_edit(v: auth.Viewer, model_ids: list[str]) -> set[int]:
+    """The owners of these models; 403 unless v may change all of them."""
+    owners = {r[0] for r in library._ids_in_chunks("SELECT DISTINCT owner FROM files WHERE model_id IN (%s)",
+                                                   list(model_ids))}
+    if not all(v.can_edit(o) for o in owners):
+        raise HTTPException(403, "You can only change your own models")
+    return owners
+
+
+def _check_prefix(v: auth.Viewer, prefix: str):
+    """Non-admins can only put correction rules on paths in their own folder."""
+    if not v.is_admin and not library._under(prefix, library.user_folder(v.username)):
+        raise HTTPException(403, "You can only change your own models")
+
+
 # ---------------------------------------------------------------- status & jobs
 
 @app.get("/api/status")
-def status():
+def status(request: Request):
+    v = getattr(request.state, "viewer", None)
+    if v is None:  # the container health check
+        return {"ok": True, "version": __version__}
     c = db.conn()
+    where, args = _vis(v)
     counts: dict[str, int] = {}
     for table in ("files", "images"):
         for r in c.execute(f"SELECT preview, COUNT(*) n FROM {table} WHERE hidden=0 GROUP BY preview"):
             counts[r["preview"]] = counts.get(r["preview"], 0) + r["n"]
     return {
         "job": library.job.as_dict(),
-        "files": c.execute("SELECT COUNT(*) FROM files WHERE hidden=0").fetchone()[0],
-        "models": c.execute("SELECT COUNT(DISTINCT model_id) FROM files WHERE hidden=0").fetchone()[0],
-        "releases": c.execute("SELECT COUNT(DISTINCT release) FROM files WHERE hidden=0").fetchone()[0],
+        "files": c.execute(f"SELECT COUNT(*) FROM files WHERE hidden=0 AND {where}", args).fetchone()[0],
+        "models": c.execute(f"SELECT COUNT(DISTINCT model_id) FROM files WHERE hidden=0 AND {where}", args).fetchone()[0],
+        "releases": c.execute(f"SELECT COUNT(DISTINCT release) FROM files WHERE hidden=0 AND {where}", args).fetchone()[0],
         "previews": counts,
         "rendering": library.preview_state["current"],
         "source_dir": str(config.SOURCE_DIR),
@@ -62,12 +132,12 @@ def status():
 
 
 @app.get("/api/settings")
-def get_settings():
+def get_settings(v: Me):
     return settings.values()
 
 
 @app.put("/api/settings")
-def put_settings(changes: dict[str, Union[int, str]]):
+def put_settings(changes: dict[str, Union[int, str]], v: Admin):
     try:
         changed = settings.update(changes)
     except ValueError as e:
@@ -77,31 +147,33 @@ def put_settings(changes: dict[str, Union[int, str]]):
 
 
 @app.post("/api/import")
-def start_import():
+def start_import(v: Admin):
     if not library.run_job("import", library.import_library):
         raise HTTPException(409, "Another job is running")
     return {"ok": True}
 
 
 @app.put("/api/upload")
-async def upload(request: Request, path: str, size: int = -1, depth: int = Query(0, ge=0, le=1)):
-    """Save one file (raw request body) at `path` inside the library.
+async def upload(request: Request, v: Me, path: str, size: int = -1, depth: int = Query(0, ge=0, le=1)):
+    """Save one file (raw request body) at `path` inside the library, or inside the uploader's
+    own folder for anyone but the main admin.
     depth=1 when `path` starts with a creator folder (Creator/Release/...)."""
+    folder = "" if v.id == db.MAIN_ADMIN else library.user_folder(v.username)
     try:
-        return await library.save_upload(path, size, request.stream(), depth)
+        return await library.save_upload(path, size, request.stream(), depth, folder)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
 @app.post("/api/index")
-def start_index():
+def start_index(v: Me):
     """Index the library after uploads (queued if another job is running)."""
     library.request_reindex()
     return {"ok": True}
 
 
 @app.post("/api/previews/retry")
-def retry_previews():
+def retry_previews(v: Admin):
     for table in ("files", "images"):
         db.conn().execute(f"UPDATE {table} SET preview='pending', preview_error=NULL WHERE preview='error'")
     db.conn().commit()
@@ -123,18 +195,18 @@ def _source(source: str) -> str:
 
 
 @app.get("/api/releases")
-def releases(q: str = "", tags: str = "", creator: Optional[str] = None, source: str = ""):
+def releases(v: Me, q: str = "", tags: str = "", creator: Optional[str] = None, source: str = "", scope: str = ""):
     """Releases with their model count; `mmf` counts the MyMiniFactory items shown in them too."""
     c = db.conn()
     source = _source(source)
     out = []
     if source in ("", "local"):
-        where, args = _filters(None, q, [t for t in tags.split(",") if t.strip()], creator)
+        where, args = _filters(v, scope, None, q, [t for t in tags.split(",") if t.strip()], creator)
         rows = c.execute(f"""SELECT release, MAX(creator) creator, COUNT(DISTINCT model_id) models, COUNT(*) files,
                              SUM(size) size FROM files WHERE {where} GROUP BY release ORDER BY release COLLATE NOCASE""",
                          args).fetchall()
         out = [{**dict(r), "mmf": 0} for r in rows]
-    if source != "local":
+    if source != "local" and _mmf_shown(v, scope):
         online = mmf.releases(q, creator, source, [t for t in tags.split(",") if t.strip()])
         for r in out:
             hit = online.pop(r["release"].casefold(), None)
@@ -145,15 +217,17 @@ def releases(q: str = "", tags: str = "", creator: Optional[str] = None, source:
 
 
 @app.get("/api/releases/images")
-def release_images(release: str):
+def release_images(release: str, v: Me, scope: str = ""):
     """Preview pictures that came with a release (not tied to one model)."""
-    return library.release_images(release)
+    return library.release_images(release, *_vis(v, scope))
 
 
-def _filters(release: Optional[str], q: str, tags: list[str], creator: Optional[str] = None):
-    """SQL for files matching the filters. Tags include those of the MyMiniFactory items matched
-    to a model (mmf.local_tags)."""
-    where, args = ["hidden=0"], []
+def _filters(v: auth.Viewer, scope: str, release: Optional[str], q: str, tags: list[str],
+             creator: Optional[str] = None):
+    """SQL for the files v may see matching the filters. Tags include those of the MyMiniFactory
+    items matched to a model (mmf.local_tags)."""
+    vis, args = _vis(v, scope)
+    where = ["hidden=0", vis]
     online = mmf.local_tags() if q or tags else {}
 
     def online_ids(test) -> str:
@@ -206,17 +280,18 @@ def _clean_tags(tags: list[str]) -> list[str]:
 
 
 @app.get("/api/models")
-def models(release: Optional[str] = None, q: str = "", supported: Optional[str] = None,
+def models(v: Me, release: Optional[str] = None, q: str = "", supported: Optional[str] = None,
            tags: str = "", creator: Optional[str] = None, offset: int = 0, limit: int = Query(200, le=1000),
-           source: str = ""):
+           source: str = "", scope: str = ""):
     """Models in the grid: synced MyMiniFactory items first, newest published first, then the library's
     models by release and name. MyMiniFactory items are mixed in like models (with mmf: true) unless
     `source` says otherwise; they have no supported versions."""
     c = db.conn()
     source = _source(source)
     tag_list = [t for t in tags.split(",") if t.strip()]
-    online = [] if source == "local" or supported else mmf.newest_first(mmf.grid_items(q, creator, release, source, tag_list))
-    where, args = _filters(release, q, tag_list, creator)
+    online = [] if source == "local" or supported or not _mmf_shown(v, scope) else mmf.newest_first(
+        mmf.grid_items(q, creator, release, source, tag_list))
+    where, args = _filters(v, scope, release, q, tag_list, creator)
     having = ""
     if supported == "yes":
         having = "HAVING SUM(supported = 1) > 0"
@@ -234,26 +309,33 @@ def models(release: Optional[str] = None, q: str = "", supported: Optional[str] 
         rows = c.execute(f"""{_MODEL_SELECT} WHERE {where} GROUP BY model_id {having}
                              ORDER BY MIN(release) COLLATE NOCASE, MIN(model) COLLATE NOCASE LIMIT ? OFFSET ?""",
                          args + [local_limit, local_offset]).fetchall()
-        items += _model_dicts(rows)
+        items += _model_dicts(rows, v)
     return {"total": local_total + len(online), "items": items}
 
 
 _MODEL_SELECT = """SELECT model_id, MIN(model) model, MIN(release) release, MAX(creator) creator,
-                COUNT(*) files, SUM(size) size,
+                COUNT(*) files, SUM(size) size, MIN(owner) owner, MAX(public) public,
                 SUM(supported = 1) supported_files, SUM(supported = 0) unsupported_files,
                 SUM(ext = '.stl') stl_files, COUNT(DISTINCT NULLIF(option, '')) options,
                 GROUP_CONCAT(DISTINCT ext) exts
                 FROM files"""
 
 
-def _model_dicts(rows) -> list[dict]:
+def _owner_fields(v: auth.Viewer, owner: int, public, names: dict[int, str]) -> dict:
+    return {"owner": owner, "owner_name": names.get(owner, ""), "public": bool(public),
+            "mine": owner == v.id, "can_edit": v.can_edit(owner)}
+
+
+def _model_dicts(rows, v: auth.Viewer) -> list[dict]:
     covers = library.cover_file_ids([r["model_id"] for r in rows])
     images = library.cover_image_ids([r["model_id"] for r in rows])
     tag_map = _tags_for([r["model_id"] for r in rows])
     online = mmf.local_tags()
+    names = auth.usernames()
     out = []
     for r in rows:
         d = dict(r)
+        d.update(_owner_fields(v, r["owner"], r["public"], names))
         d["id"] = d.pop("model_id")
         d["mmf_tags"] = _online_tags(d["id"], tag_map.get(d["id"], []), online)
         d["cover"] = covers.get(d["id"])
@@ -280,29 +362,33 @@ def _file_dict(r):
 
 
 @app.get("/api/models/{model_id}")
-def model_detail(model_id: str, include_hidden: bool = False):
+def model_detail(model_id: str, v: Me, include_hidden: bool = False):
     c = db.conn()
-    rows = c.execute("SELECT * FROM files WHERE model_id=? " + ("" if include_hidden else "AND hidden=0 ") +
-                     "ORDER BY option, supported, name COLLATE NOCASE", (model_id,)).fetchall()
+    where, args = _vis(v)
+    rows = c.execute(f"SELECT * FROM files WHERE model_id=? AND {where} " + ("" if include_hidden else "AND hidden=0 ") +
+                     "ORDER BY option, supported, name COLLATE NOCASE", (model_id, *args)).fetchall()
     if not rows:
         raise HTTPException(404)
+    owner = rows[0]["owner"]
     covers = library.cover_file_ids([model_id])
     main_file = library.main_file_ids([model_id]).get(model_id)
     return {
         "id": model_id, "model": rows[0]["model"], "release": rows[0]["release"], "creator": rows[0]["creator"],
+        **_owner_fields(v, owner, max(r["public"] for r in rows), auth.usernames()),
         "cover": covers.get(model_id),
         "main_file": main_file,
-        "images": library.model_images(model_id, rows[0]["release"]),
+        "images": library.model_images(model_id, rows[0]["release"], owner),
         "tags": (tags := _tags_for([model_id])[model_id]),
         "mmf_tags": _online_tags(model_id, tags, mmf.local_tags()),
         "roots": sorted({r["model_root"] for r in rows}),
-        "combine": library.combine_for(rows[0]["release"], rows[0]["model"]),
+        "combine": library.combine_for(rows[0]["release"], rows[0]["model"], owner),
         "files": [_file_dict(r) for r in rows],
     }
 
 
 @app.get("/api/files/{file_id}/preview")
-def file_preview(file_id: int):
+def file_preview(file_id: int, v: Me):
+    _visible("files", file_id, v)
     p = library.preview_for(file_id)
     if not p:
         raise HTTPException(404, "No preview")
@@ -310,7 +396,8 @@ def file_preview(file_id: int):
 
 
 @app.get("/api/images/{image_id}/preview")
-def image_preview(image_id: int):
+def image_preview(image_id: int, v: Me):
+    _visible("images", image_id, v)
     p = library.preview_for(image_id, "images")
     if not p:
         raise HTTPException(404, "No preview")
@@ -318,10 +405,9 @@ def image_preview(image_id: int):
 
 
 @app.get("/api/images/{image_id}/full")
-def image_full(image_id: int):
+def image_full(image_id: int, v: Me):
     """The bundled picture as it is, straight out of its archive if need be."""
-    r = db.conn().execute("SELECT * FROM images WHERE id=?", (image_id,)).fetchone()
-    return _send(r, inline=True)
+    return _send(_visible("images", image_id, v), inline=True)
 
 
 class MainPictureIn(BaseModel):
@@ -332,22 +418,38 @@ class MainPictureIn(BaseModel):
 
 
 @app.put("/api/main-picture")
-def main_picture(m: MainPictureIn):
-    """Pick the picture shown first for a release or a model."""
+def main_picture(m: MainPictureIn, v: Me):
+    """Pick the picture shown first for a release or a model. A release's main picture is kept
+    per owner, so each person picks it for their own models in it."""
     if m.kind not in ("release", "model") or not m.key:
         raise HTTPException(400, "kind must be release or model, with a key")
     if m.file_id is not None and m.kind != "model":
         raise HTTPException(400, "Only a model's main image can be a file preview")
+    if m.image_id is not None:
+        owners = {_visible("images", m.image_id, v)["owner"]}
+    elif m.file_id is not None:
+        owners = {_visible("files", m.file_id, v)["owner"]}
+    elif m.kind == "model":
+        owners = {_model_owner(m.key) or v.id}
+    else:  # un-picking a release's main picture: the viewer's own, or everyone's for an admin
+        owners = {v.id} | ({r[0] for r in db.conn().execute("SELECT DISTINCT owner FROM files WHERE release=?",
+                                                             (m.key,))} if v.is_admin else set())
+    if m.kind == "model":
+        _check_edit(v, [m.key])
+    elif not all(v.can_edit(o) for o in owners):
+        raise HTTPException(403, "You can only change your own models")
     try:
-        library.set_main_picture(m.kind, m.key, m.image_id, m.file_id)
+        for owner in owners:
+            key = m.key if m.kind == "model" else library.release_key(m.key, owner)
+            library.set_main_picture(m.kind, key, m.image_id, m.file_id)
     except KeyError:
         raise HTTPException(404, "No such picture")
     return {"ok": True}
 
 
 @app.get("/api/files/{file_id}/download")
-def file_download(file_id: int):
-    return _send(db.conn().execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone())
+def file_download(file_id: int, v: Me):
+    return _send(_visible("files", file_id, v))
 
 
 def _send(r, inline: bool = False):
@@ -402,11 +504,12 @@ def _apply_tags(model_ids: list[str], t: TagsIn, mmf_ids: list[int] = ()):
 
 
 @app.get("/api/tags")
-def all_tags(release: Optional[str] = None):
+def all_tags(v: Me, release: Optional[str] = None, scope: str = ""):
     """Tags with how many models (and MyMiniFactory items not in the library) have them,
     MyMiniFactory tags included; spellings that differ only in capitals count as one."""
     c = db.conn()
-    where, args = "f.hidden=0", []
+    vis, args = _vis(v, scope)
+    where = "f.hidden=0 AND " + vis.replace("owner", "f.owner").replace("public", "f.public")
     if release is not None:
         where += " AND f.release=?"
         args.append(release)
@@ -425,26 +528,29 @@ def all_tags(release: Optional[str] = None):
             if model_id in shown:
                 for t in tags:
                     add(t, model_id)
-    for d in mmf.grid_items(release=release):
+    for d in mmf.grid_items(release=release) if _mmf_shown(v, scope) else ():
         for t in d["tags"] + d["mmf_tags"]:
             add(t, ("mmf", d["id"]))
     return [{"tag": g["tag"], "models": len(g["ids"])} for g in sorted(groups.values(), key=lambda g: g["tag"].casefold())]
 
 
 @app.post("/api/models/{model_id}/tags")
-def model_tags(model_id: str, t: TagsIn):
+def model_tags(model_id: str, t: TagsIn, v: Me):
+    _check_edit(v, [model_id])
     _apply_tags([model_id], t)
     return {"tags": _tags_for([model_id])[model_id]}
 
 
 @app.post("/api/releases/tags")
-def release_tags(t: TagsIn):
-    """Add or remove tags on every model in a release, and on its MyMiniFactory items not in the library."""
+def release_tags(t: TagsIn, v: Me, scope: str = ""):
+    """Add or remove tags on every model in a release that the viewer may change, and on its
+    MyMiniFactory items not in the library."""
     if t.release is None:
         raise HTTPException(400, "release is required")
+    where, args = _vis(v, scope if v.is_admin else "mine")
     ids = [r[0] for r in db.conn().execute(
-        "SELECT DISTINCT model_id FROM files WHERE release=? AND hidden=0", (t.release,))]
-    online = [d["id"] for d in mmf.grid_items(release=t.release)]
+        f"SELECT DISTINCT model_id FROM files WHERE release=? AND hidden=0 AND {where}", (t.release, *args))]
+    online = [d["id"] for d in mmf.grid_items(release=t.release)] if _mmf_shown(v, scope) else []
     _apply_tags(ids, t, online)
     return {"models": len(ids) + len(online)}
 
@@ -452,16 +558,16 @@ def release_tags(t: TagsIn):
 # ---------------------------------------------------------------- creators
 
 @app.get("/api/creators")
-def creators(q: str = "", tags: str = ""):
+def creators(v: Me, q: str = "", tags: str = "", scope: str = ""):
     """Every creator with its release and model counts ('' = releases without one), and how many
     synced MyMiniFactory items are by them (mmf). Creators only on MyMiniFactory are listed too,
     with no releases; names are matched loosely ('CobraMode' == 'Cobra Mode')."""
-    where, args = _filters(None, q, [t for t in tags.split(",") if t.strip()])
+    where, args = _filters(v, scope, None, q, [t for t in tags.split(",") if t.strip()])
     rows = db.conn().execute(f"""SELECT MIN(creator) creator, COUNT(DISTINCT release) releases,
                                  COUNT(DISTINCT model_id) models FROM files WHERE {where}
                                  GROUP BY creator COLLATE NOCASE ORDER BY creator COLLATE NOCASE""", args).fetchall()
     out = [{**dict(r), "mmf": 0} for r in rows]
-    online = mmf.creators(q, [t for t in tags.split(",") if t.strip()])
+    online = mmf.creators(q, [t for t in tags.split(",") if t.strip()]) if _mmf_shown(v, scope) else {}
     for c in out:
         hit = online.pop(mmf.creator_key(c["creator"]), None)
         c["mmf"] = hit["items"] if hit else 0
@@ -477,13 +583,13 @@ class CreatorRenameIn(BaseModel):
 
 
 @app.get("/api/creators/folders")
-def creator_folders(creator: str):
+def creator_folders(creator: str, v: Admin):
     """The library folders a creator's name comes from (what a rename with folders=true moves)."""
     return {"folders": library.creator_folders(creator)}
 
 
 @app.post("/api/creators/rename")
-def rename_creator(body: CreatorRenameIn):
+def rename_creator(body: CreatorRenameIn, v: Admin):
     """Change how a creator is shown, everywhere (local releases and MyMiniFactory items).
     Stored by the creator's loose name key, so it is kept across re-indexing and syncs.
     With folders, the creator's folders in the library copy are renamed too."""
@@ -514,14 +620,16 @@ class CreatorIn(BaseModel):
 
 
 @app.post("/api/releases/creator")
-def set_release_creator(body: CreatorIn):
+def set_release_creator(body: CreatorIn, v: Me):
     """Set the creator of one or more releases. Kept across re-indexing."""
-    creator = _set_creator(body.releases, body.creator)
+    creator = _set_creator(body.releases, body.creator, v)
     library.reclassify()
     return {"releases": len(body.releases), "creator": creator}
 
 
-def _set_creator(releases: list[str], creator: str) -> str:
+def _set_creator(releases: list[str], creator: str, v: auth.Viewer) -> str:
+    """Each person's models in a release have their own creator setting: the viewer's own, and for
+    an admin everyone's in those releases."""
     creator = " ".join(creator.split())
     if len(creator) > 200:
         raise HTTPException(400, "Creator name is too long")
@@ -531,11 +639,16 @@ def _set_creator(releases: list[str], creator: str) -> str:
                         (creator,)).fetchone()
         creator = row[0] if row else creator
     for release in releases:
-        if creator:
-            c.execute("INSERT INTO release_creators(release, creator) VALUES (?, ?) "
-                      "ON CONFLICT(release) DO UPDATE SET creator=excluded.creator", (release, creator))
-        else:
-            c.execute("DELETE FROM release_creators WHERE release = ?", (release,))
+        owners = {v.id}
+        if v.is_admin:
+            owners |= {r[0] for r in c.execute("SELECT DISTINCT owner FROM files WHERE release = ? COLLATE NOCASE",
+                                               (release,))}
+        for key in (library.release_key(release, o) for o in owners):
+            if creator:
+                c.execute("INSERT INTO release_creators(release, creator) VALUES (?, ?) "
+                          "ON CONFLICT(release) DO UPDATE SET creator=excluded.creator", (key, creator))
+            else:
+                c.execute("DELETE FROM release_creators WHERE release = ?", (key,))
     c.commit()
     return creator
 
@@ -554,15 +667,20 @@ class OverrideIn(BaseModel):
 
 
 @app.post("/api/overrides")
-def add_override(o: OverrideIn):
+def add_override(o: OverrideIn, v: Me):
     c = db.conn()
     prefixes = [p.strip().strip("/") for p in o.prefixes]
     if not all(prefixes):
         raise HTTPException(400, "Empty prefix")
+    for p in prefixes:
+        _check_prefix(v, p)
+    owner = None
+    if o.from_model_id:
+        owner = next(iter(_check_edit(v, [o.from_model_id])), None)
     library.add_overrides(prefixes, {k: getattr(o, k) for k in library._OVERRIDE_FIELDS})
     library.reclassify()
-    if o.from_model_id and o.model is not None and o.release is not None:
-        new_id = library.model_id(o.release, o.model)
+    if owner is not None and o.model is not None and o.release is not None:
+        new_id = library.model_id(o.release, o.model, owner)
         if new_id != o.from_model_id:
             c.execute("INSERT OR IGNORE INTO model_tags(model_id, tag) SELECT ?, tag FROM model_tags WHERE model_id=?",
                       (new_id, o.from_model_id))
@@ -575,12 +693,18 @@ def add_override(o: OverrideIn):
 
 
 @app.get("/api/overrides")
-def list_overrides():
-    return [dict(r) for r in db.conn().execute("SELECT * FROM overrides ORDER BY prefix")]
+def list_overrides(v: Me):
+    mine = library.user_folder(v.username)
+    return [dict(r) for r in db.conn().execute("SELECT * FROM overrides ORDER BY prefix")
+            if v.is_admin or library._under(r["prefix"], mine)]
 
 
 @app.delete("/api/overrides/{oid}")
-def delete_override(oid: int):
+def delete_override(oid: int, v: Me):
+    row = db.conn().execute("SELECT prefix FROM overrides WHERE id=?", (oid,)).fetchone()
+    if not row:
+        raise HTTPException(404)
+    _check_prefix(v, row["prefix"])
     db.conn().execute("DELETE FROM overrides WHERE id=?", (oid,))
     db.conn().commit()
     library.reclassify()
@@ -606,7 +730,7 @@ def _check_map(m: MapIn) -> tuple[str, tuple]:
 
 
 @app.get("/api/maps")
-def list_maps():
+def list_maps(v: Admin):
     counts = {}
     rows = db.conn().execute("SELECT logical_path FROM files").fetchall()
     maps = library.path_maps()
@@ -616,24 +740,24 @@ def list_maps():
 
 
 @app.get("/api/maps/suggest")
-def suggest_map(path: str):
+def suggest_map(path: str, v: Admin):
     """The folder roles a path is read with now (from its mapping or the automatic guess)."""
     return library.map_suggestion(path)
 
 
 @app.post("/api/maps/preview")
-def preview_map(m: MapIn):
+def preview_map(m: MapIn, v: Admin):
     return library.preview_map(*_check_map(m))
 
 
 @app.post("/api/maps")
-def save_map(m: MapIn):
+def save_map(m: MapIn, v: Admin):
     library.save_map(*_check_map(m))
     return {"ok": True}
 
 
 @app.delete("/api/maps/{map_id}")
-def delete_map(map_id: int):
+def delete_map(map_id: int, v: Admin):
     if not library.delete_map(map_id):
         raise HTTPException(404)
     return {"ok": True}
@@ -650,22 +774,28 @@ class BulkIn(BaseModel):
     creator: Optional[str] = None   # creator of the release(s) they end up in; '' = back to the guess
     supported: Optional[int] = None  # 1 / 0 / -1 (unknown)
     hidden: Optional[int] = None
+    public: Optional[bool] = None   # who can see them: everyone, or only their owner
 
 
 @app.post("/api/models/bulk")
-def bulk_edit(b: BulkIn):
+def bulk_edit(b: BulkIn, v: Me):
     """Edit several models at once (tags first, so they move with the models)."""
     if not b.model_ids and not b.mmf_ids:
         raise HTTPException(400, "Pick some models")
+    if b.mmf_ids and not v.is_admin:
+        raise HTTPException(403, "Only an admin can change MyMiniFactory items")
+    _check_edit(v, b.model_ids)
     release = " ".join(b.release.split()) if b.release is not None else None
     if b.supported not in (None, 1, 0, -1):
         raise HTTPException(400, "Bad support value")
     _apply_tags(b.model_ids, TagsIn(add=b.add_tags, remove=b.remove_tags), b.mmf_ids)
     if not b.model_ids:
         return {"models": 0, "mmf": len(b.mmf_ids), "releases": []}
+    if b.public is not None:
+        library.set_visibility(b.model_ids, b.public)
     releases = library.bulk_edit(b.model_ids, release or None, b.supported, 1 if b.hidden else None)
     if b.creator is not None and releases:
-        _set_creator(releases, b.creator)
+        _set_creator(releases, b.creator, v)
         library.reclassify()
     return {"models": len(b.model_ids), "mmf": len(b.mmf_ids), "releases": releases}
 
@@ -686,29 +816,44 @@ def _combine_name(name: str) -> str:
 
 
 @app.get("/api/combines")
-def list_combines():
-    return library.combines()
+def list_combines(v: Me):
+    return [cb for cb in library.combines() if v.is_admin or cb["owner"] == v.id]
+
+
+def _combine_owner(combine_id: int, v: auth.Viewer) -> int:
+    row = db.conn().execute("SELECT owner FROM model_combines WHERE id=?", (combine_id,)).fetchone()
+    if not row:
+        raise HTTPException(404)
+    if not v.can_edit(row["owner"]):
+        raise HTTPException(403, "You can only change your own models")
+    return row["owner"]
 
 
 @app.post("/api/combines")
-def combine(body: CombineIn):
+def combine(body: CombineIn, v: Me):
     """Combine models of a release into one; each becomes an option group."""
+    owners = _check_edit(v, body.model_ids)
+    if len(owners) > 1:
+        raise HTTPException(400, "Only one person's models can be combined")
     try:
-        return library.combine_models(body.release, body.model_ids, _combine_name(body.name))
+        return library.combine_models(body.release, body.model_ids, _combine_name(body.name),
+                                      next(iter(owners), v.id))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
 @app.put("/api/combines/{combine_id}")
-def update_combine(combine_id: int, body: CombineIn):
+def update_combine(combine_id: int, body: CombineIn, v: Me):
     """Rename a combined model or move it to another release."""
+    owner = _combine_owner(combine_id, v)
     if not library.update_combine(combine_id, _combine_name(body.name), body.release):
         raise HTTPException(404)
-    return {"id": library.model_id(body.release, body.name)}
+    return {"id": library.model_id(body.release, body.name, owner)}
 
 
 @app.delete("/api/combines/{combine_id}")
-def split_combine(combine_id: int):
+def split_combine(combine_id: int, v: Me):
+    _combine_owner(combine_id, v)
     if not library.split_combine(combine_id):
         raise HTTPException(404)
     return {"ok": True}
@@ -717,19 +862,19 @@ def split_combine(combine_id: int):
 # ---------------------------------------------------------------- MyMiniFactory
 
 @app.get("/api/mmf")
-def mmf_items(q: str = "", missing: bool = False, offset: int = 0, limit: int = Query(200, le=1000),
+def mmf_items(v: Admin, q: str = "", missing: bool = False, offset: int = 0, limit: int = Query(200, le=1000),
               creator: Optional[str] = None, release: Optional[str] = None):
     """The synced MyMiniFactory library; `local` is the matching local release or model."""
     return mmf.items(q, missing, offset, limit, creator, release)
 
 
 @app.get("/api/mmf/status")
-def mmf_status():
+def mmf_status(v: Admin):
     return mmf.status()
 
 
 @app.post("/api/mmf/import")
-def mmf_import(payload: dict):
+def mmf_import(payload: dict, v: Admin):
     try:
         return mmf.import_library(payload)
     except ValueError as e:
@@ -737,24 +882,24 @@ def mmf_import(payload: dict):
 
 
 @app.get("/api/mmf/queue")
-def mmf_queue():
+def mmf_queue(v: Admin):
     """What the bookmarklet should download on this run (asked for by the sync window)."""
     return mmf.queue()
 
 
 @app.get("/api/mmf/gallery")
-def mmf_gallery_needed():
+def mmf_gallery_needed(v: Admin):
     """Items the bookmarklet should read full-size images for."""
     return mmf.gallery_needed()
 
 
 @app.post("/api/mmf/gallery")
-def mmf_set_gallery(payload: dict):
+def mmf_set_gallery(payload: dict, v: Admin):
     return {"saved": mmf.set_galleries(payload.get("items") or [])}
 
 
 @app.get("/api/mmf/{oid}")
-def mmf_item(oid: int):
+def mmf_item(oid: int, v: Admin):
     d = mmf.item(oid)
     if not d:
         raise HTTPException(404)
@@ -766,7 +911,7 @@ class MmfQueueIn(BaseModel):
 
 
 @app.post("/api/mmf/{oid}/tags")
-def mmf_item_tags(oid: int, t: TagsIn):
+def mmf_item_tags(oid: int, t: TagsIn, v: Admin):
     """The item's own tags, added in the app (its MyMiniFactory tags stay as they are)."""
     if not db.conn().execute("SELECT 1 FROM mmf_items WHERE id=?", (oid,)).fetchone():
         raise HTTPException(404)
@@ -775,7 +920,7 @@ def mmf_item_tags(oid: int, t: TagsIn):
 
 
 @app.post("/api/mmf/{oid}/queue")
-def mmf_set_queued(oid: int, body: MmfQueueIn):
+def mmf_set_queued(oid: int, body: MmfQueueIn, v: Admin):
     """Mark an item to be downloaded into the library the next time the bookmarklet runs."""
     if not mmf.set_queued(oid, body.queued):
         raise HTTPException(404)
@@ -788,7 +933,7 @@ class MmfResultIn(BaseModel):
 
 
 @app.post("/api/mmf/{oid}/downloaded")
-def mmf_downloaded(oid: int, body: MmfResultIn):
+def mmf_downloaded(oid: int, body: MmfResultIn, v: Admin):
     mmf.download_result(oid, body.ok, body.note)
     if body.ok:
         library.request_reindex()
@@ -796,7 +941,7 @@ def mmf_downloaded(oid: int, body: MmfResultIn):
 
 
 @app.delete("/api/mmf")
-def mmf_clear():
+def mmf_clear(v: Admin):
     mmf.clear()
     return {"ok": True}
 
@@ -808,9 +953,176 @@ def mmf_sync_page():
 
 
 @app.get("/api/hidden")
-def hidden_files():
-    rows = db.conn().execute("SELECT * FROM files WHERE hidden=1 ORDER BY logical_path LIMIT 1000").fetchall()
+def hidden_files(v: Me):
+    where, args = _vis(v, "" if v.is_admin else "mine")
+    rows = db.conn().execute(f"SELECT * FROM files WHERE hidden=1 AND {where} ORDER BY logical_path LIMIT 1000",
+                             args).fetchall()
     return [_file_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------- visibility
+
+class VisibilityIn(BaseModel):
+    public: bool
+
+
+@app.put("/api/models/{model_id}/visibility")
+def model_visibility(model_id: str, body: VisibilityIn, v: Me):
+    """Public: every user can see the model. Private: only its owner (and admins in admin mode)."""
+    if _model_owner(model_id) is None:
+        raise HTTPException(404)
+    _check_edit(v, [model_id])
+    library.set_visibility([model_id], body.public)
+    return {"public": body.public}
+
+
+# ---------------------------------------------------------------- accounts
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+def _login_response(request: Request, token: str) -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
+                    secure=https)
+    return resp
+
+
+@app.get("/api/auth/state")
+def auth_state(request: Request):
+    v = getattr(request.state, "viewer", None)
+    return {"setup": auth.setup_needed(), "user": v.as_dict() if v else None}
+
+
+@app.post("/api/auth/setup")
+def auth_setup(body: LoginIn, request: Request):
+    """The first visit makes the main admin account, which owns the library as it is."""
+    if not auth.setup_needed():
+        raise HTTPException(409, "The admin account is already set up; log in instead")
+    try:
+        auth.create_user(body.username, body.password, is_admin=True)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _login_response(request, auth.login(body.username, body.password))
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginIn, request: Request):
+    token = auth.login(body.username, body.password)
+    if not token:
+        raise HTTPException(401, "Wrong username or password")
+    return _login_response(request, token)
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    token = request.cookies.get(auth.COOKIE)
+    if token:
+        auth.logout(token)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE)
+    return resp
+
+
+@app.get("/api/me")
+def me(v: Me):
+    """The logged-in user; `others` says whether anyone else has an account."""
+    return {**v.as_dict(), "others": len(auth.users()) > 1}
+
+
+class MeIn(BaseModel):
+    default_public: Optional[bool] = None  # all my models public / private (clears per-model choices)
+    password: Optional[str] = None
+    current_password: str = ""
+
+
+@app.put("/api/me")
+def update_me(body: MeIn, request: Request, v: Me):
+    if body.password is not None:
+        row = db.conn().execute("SELECT password FROM users WHERE id=?", (v.id,)).fetchone()
+        if not auth.check_password(body.current_password, row["password"]):
+            raise HTTPException(400, "Your current password isn't right")
+        try:
+            auth.set_password(v.id, body.password, keep=request.cookies.get(auth.COOKIE))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    if body.default_public is not None:
+        auth.update_user(v.id, default_public=body.default_public)
+        library.clear_visibility(v.id, v.username)
+        library.reclassify()
+    return auth.viewer(request.cookies.get(auth.COOKIE)).as_dict()
+
+
+class AdminModeIn(BaseModel):
+    on: bool
+
+
+@app.put("/api/me/admin-mode")
+def admin_mode(body: AdminModeIn, request: Request, v: Admin):
+    """Admin mode: see everyone's models, private ones too (for this login)."""
+    auth.set_admin_mode(request.cookies.get(auth.COOKIE), body.on)
+    return auth.viewer(request.cookies.get(auth.COOKIE)).as_dict()
+
+
+class UserIn(BaseModel):
+    username: str = ""
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
+
+
+@app.get("/api/users")
+def list_users(v: Admin):
+    c = db.conn()
+    counts = {r["owner"]: r["n"] for r in c.execute(
+        "SELECT owner, COUNT(DISTINCT model_id) n FROM files WHERE hidden=0 GROUP BY owner")}
+    return [{**u, "models": counts.get(u["id"], 0)} for u in auth.users()]
+
+
+@app.post("/api/users")
+def add_user(body: UserIn, v: Admin):
+    try:
+        uid = auth.create_user(body.username, body.password or "", bool(body.is_admin))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if (config.LIBRARY_DIR / library.user_folder(body.username.strip())).exists():
+        library.reclassify()  # a folder left by an earlier account of that name is theirs now
+    return {"id": uid}
+
+
+@app.put("/api/users/{user_id}")
+def edit_user(user_id: int, body: UserIn, v: Admin):
+    if not db.conn().execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
+        raise HTTPException(404)
+    try:
+        if body.password:
+            auth.set_password(user_id, body.password)
+        if body.is_admin is not None:
+            if user_id == v.id and not body.is_admin:
+                raise ValueError("You can't take away your own admin rights")
+            auth.update_user(user_id, is_admin=body.is_admin)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/users/{user_id}")
+def remove_user(user_id: int, v: Admin):
+    """Remove an account. Their files stay in the library, in their folder, and belong to the
+    main admin from then on (private, with their tags)."""
+    c = db.conn()
+    before = {r["id"]: r["model_id"] for r in c.execute("SELECT id, model_id FROM files WHERE owner=?", (user_id,))}
+    try:
+        if not auth.delete_user(user_id):
+            raise HTTPException(404)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    c.execute("UPDATE model_combines SET owner=? WHERE owner=?", (db.MAIN_ADMIN, user_id))
+    c.commit()
+    library._regroup(before)
+    return {"ok": True}
 
 
 # Changes with every image, so browsers fetch the new app.js/style.css after an
@@ -819,12 +1131,31 @@ ASSET_VERSION = config.GIT_COMMIT or str(int(time.time()))
 NO_CACHE = {"Cache-Control": "no-cache"}
 
 
+def _page(name: str) -> HTMLResponse:
+    html = (STATIC / name).read_text(encoding="utf-8")
+    for asset in ("app.js", "style.css"):
+        html = html.replace(f"/static/{asset}\"", f"/static/{asset}?v={ASSET_VERSION}\"")
+    return HTMLResponse(html, headers=NO_CACHE)
+
+
 @app.get("/")
 def index():
-    html = (STATIC / "index.html").read_text(encoding="utf-8")
-    for name in ("app.js", "style.css"):
-        html = html.replace(f"/static/{name}\"", f"/static/{name}?v={ASSET_VERSION}\"")
-    return HTMLResponse(html, headers=NO_CACHE)
+    return _page("index.html")
+
+
+# Reachable without logging in: the login page's own calls, static files and the health check.
+_OPEN = ("/api/auth/", "/static/")
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    request.state.viewer = auth.viewer(request.cookies.get(auth.COOKIE))
+    path = request.url.path
+    if request.state.viewer is None and not path.startswith(_OPEN) and path != "/api/status":
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "Log in first"}, status_code=401)
+        return _page("login.html")
+    return await call_next(request)
 
 
 @app.middleware("http")

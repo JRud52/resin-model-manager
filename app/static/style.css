@@ -239,3 +239,32 @@ a.button-like.primary { background: var(--accent); border-color: var(--accent); 
 #bulkMmfNote:empty { display: none; }
 
 .notice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel2); }
+
+/* Accounts */
+.login-page { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
+.login-card { width: min(360px, 100%); padding: 24px; }
+.login-card h1 { font-size: 20px; margin: 0 0 4px; }
+body.not-admin .admin-only { display: none !important; }
+.admin-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; cursor: pointer; }
+body.admin-mode header { border-bottom-color: var(--unsup); box-shadow: inset 0 -2px 0 var(--unsup); }
+body.admin-mode .admin-toggle { color: var(--unsup); }
+#userBtn { white-space: nowrap; }
+#scopeList { list-style: none; margin: 0; padding: 0 8px 16px; }
+#scopeList li { padding: 7px 10px; border-radius: 8px; cursor: pointer; display: flex; gap: 8px; }
+#scopeList li:hover { background: var(--panel2); }
+#scopeList li.active { background: var(--accent); color: #08131d; }
+#scopeList .name { flex: 1; }
+.badge.owner { color: var(--text); }
+.badge.pub { color: var(--sup); border-color: color-mix(in srgb, var(--sup) 50%, transparent); }
+.badge.priv { color: var(--unsup); border-color: color-mix(in srgb, var(--unsup) 50%, transparent); }
+#grid.selecting .card.locked { opacity: .45; cursor: not-allowed; }
+/* Someone else's model: look, don't touch. */
+#modelDlg.read-only #mEditBtn, #modelDlg.read-only #mVisBtn, #modelDlg.read-only #mMapBtn, #modelDlg.read-only #mTagInput,
+#modelDlg.read-only #mTags button, #modelDlg.read-only [data-edit], #modelDlg.read-only [data-file-main],
+#modelDlg.read-only [data-pic-main], #modelDlg.read-only [data-pic-rel], #modelDlg.read-only [data-pic-edit],
+#lightbox.read-only .lb-bar button, #lightbox.read-only .lb-bar label { display: none !important; }
+#accountDlg, #usersDlg { max-width: min(560px, 96vw); }
+#usersTable { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+#usersTable td, #usersTable th { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+#usersTable td:last-child { text-align: right; white-space: nowrap; }
+#usersTable .badge { white-space: nowrap; }

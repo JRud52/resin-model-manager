@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS files (
     preview TEXT NOT NULL DEFAULT 'pending', -- pending | ok | none | error
     preview_error TEXT,
     seen INTEGER NOT NULL DEFAULT 0,
+    owner INTEGER NOT NULL DEFAULT 1,  -- users.id of who uploaded it (see library.owner_of); 1 = the main admin
+    public INTEGER NOT NULL DEFAULT 0, -- 1 = every user can see it (see the visibility table)
     UNIQUE(rel_path, member)
 );
 CREATE INDEX IF NOT EXISTS files_model ON files(model_id);
@@ -49,6 +51,8 @@ CREATE TABLE IF NOT EXISTS images (
     preview TEXT NOT NULL DEFAULT 'pending',
     preview_error TEXT,
     seen INTEGER NOT NULL DEFAULT 0,
+    owner INTEGER NOT NULL DEFAULT 1,
+    public INTEGER NOT NULL DEFAULT 0, -- follows the model (or the owner's models in the release)
     UNIQUE(rel_path, member)
 );
 CREATE INDEX IF NOT EXISTS images_model ON images(model_id);
@@ -169,7 +173,35 @@ CREATE TABLE IF NOT EXISTS model_combines (
     release TEXT NOT NULL COLLATE NOCASE,
     name TEXT NOT NULL,
     parts TEXT NOT NULL,             -- JSON list of the former model names
+    owner INTEGER NOT NULL DEFAULT 1, -- only that user's models are combined
     created REAL DEFAULT (strftime('%s','now'))
+);
+
+-- People who can log in. Id 1 is the main admin, who owns everything not uploaded by someone
+-- else (the existing library, copies from the NAS folder, MyMiniFactory). Other users' uploads
+-- go into their own folder, LIBRARY/_users/<username>/.
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused, so a removed user's combines never pass to someone new
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password TEXT NOT NULL,          -- pbkdf2_sha256$iterations$salt$hash
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    default_public INTEGER NOT NULL DEFAULT 0, -- their models without a visibility rule are public
+    created REAL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,          -- sha256 of the cookie value
+    user_id INTEGER NOT NULL,
+    admin_mode INTEGER NOT NULL DEFAULT 0, -- an admin seeing everyone's models, private ones too
+    created REAL NOT NULL,
+    seen REAL NOT NULL
+);
+
+-- Public / private set on a model (prefix = its model_root) or more. Longest prefix wins;
+-- files without one follow their owner's default_public.
+CREATE TABLE IF NOT EXISTS visibility (
+    prefix TEXT PRIMARY KEY,
+    public INTEGER NOT NULL
 );
 
 -- Values saved from the Settings dialog (see settings.py).
@@ -193,6 +225,9 @@ CREATE TABLE IF NOT EXISTS overrides (
 );
 """
 
+# users.id of the main admin: the first account, made on the first visit.
+MAIN_ADMIN = 1
+
 _local = threading.local()
 
 
@@ -213,6 +248,12 @@ def init():
     c.executescript(SCHEMA)
     if "listed" not in {r["name"] for r in c.execute("PRAGMA table_info(archives)")}:
         c.execute("ALTER TABLE archives ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
+    for table, col, decl in (("files", "owner", "INTEGER NOT NULL DEFAULT 1"), ("files", "public", "INTEGER NOT NULL DEFAULT 0"),
+                             ("images", "owner", "INTEGER NOT NULL DEFAULT 1"), ("images", "public", "INTEGER NOT NULL DEFAULT 0"),
+                             ("model_combines", "owner", "INTEGER NOT NULL DEFAULT 1")):
+        if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    c.execute("CREATE INDEX IF NOT EXISTS files_owner ON files(owner)")
     if "creator" not in {r["name"] for r in c.execute("PRAGMA table_info(overrides)")}:
         c.execute("ALTER TABLE overrides ADD COLUMN creator TEXT")
     mmf_cols = {r["name"] for r in c.execute("PRAGMA table_info(mmf_items)")}

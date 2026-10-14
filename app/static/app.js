@@ -1,6 +1,7 @@
 const $ = (s, el = document) => el.querySelector(s);
 const api = async (url, opts = {}) => {
   const r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (r.status === 401) { location.reload(); throw new Error("Log in again"); }  // logged out meanwhile
   if (!r.ok) {
     const detail = (await r.json().catch(() => ({}))).detail;
     // FastAPI sends a list of {loc, msg} when the request itself doesn't fit the endpoint.
@@ -19,7 +20,8 @@ const fmtSize = (b) => {
 // creator: null = all creators, "" = releases without a creator
 // source: "" = the library and the synced MyMiniFactory items not in it, "local" = only the library,
 // "mmf" = only MyMiniFactory items, "missing" = only MyMiniFactory items not in the library
-const state = { source: "", release: null, creator: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null, releases: [] };
+// scope: "" = every model you can see (yours and public ones), "mine" = only yours
+const state = { source: "", scope: "", release: null, creator: null, q: "", sup: "", tags: [], offset: 0, items: [], total: 0, model: null, releases: [], me: null };
 const PAGE = 120;
 
 // ------------------------------------------------------------ releases & grid
@@ -28,6 +30,7 @@ const filterParams = () => {
   const p = new URLSearchParams({ q: state.q, tags: state.tags.join(",") });
   if (state.creator !== null) p.set("creator", state.creator);
   if (state.source) p.set("source", state.source);
+  if (state.scope) p.set("scope", state.scope);
   return p;
 };
 
@@ -106,7 +109,8 @@ function card(m) {
   (m.tags || []).forEach((t) => b.push(`<span class="badge tag">${esc(t)}</span>`));
   b.push(...mmfTagBadges(m.mmf_tags || [], "from-mmf"));
   m.exts.filter((x) => x && x !== ".stl").forEach((x) => b.push(`<span class="badge">${esc(x.slice(1).toUpperCase())}</span>`));
-  return `<div class="card ${state.picked?.has(m.id) ? "picked" : ""}" data-id="${m.id}">
+  b.unshift(...ownerBadges(m));
+  return `<div class="card ${state.picked?.has(m.id) ? "picked" : ""} ${m.can_edit ? "" : "locked"}" data-id="${m.id}">
     <div class="thumb">${thumb(m)}</div>
     <div class="meta">
       <div class="title" title="${esc(m.model)}">${esc(m.model)}</div>
@@ -115,10 +119,22 @@ function card(m) {
     </div></div>`;
 }
 
+// Whose a model is, and who can see it: others' models say who they're by; your own say when
+// everyone can see them (an admin in admin mode also sees others' private ones).
+function ownerBadges(m) {
+  const out = [];
+  if (!m.mine && m.owner_name) out.push(`<span class="badge owner" title="Uploaded by ${esc(m.owner_name)}">by ${esc(m.owner_name)}</span>`);
+  if (m.public && m.mine && hasOthers()) out.push(`<span class="badge pub" title="Everyone can see this model">public</span>`);
+  if (!m.public && !m.mine) out.push(`<span class="badge priv" title="Only ${esc(m.owner_name)} can see this model">private</span>`);
+  return out;
+}
+const hasOthers = () => state.me?.others !== false;
+
 async function loadModels(append = false) {
   if (!append) state.offset = 0;
   const p = new URLSearchParams({ q: state.q, offset: state.offset, limit: PAGE });
   if (state.source) p.set("source", state.source);
+  if (state.scope) p.set("scope", state.scope);
   if (state.release !== null) p.set("release", state.release);
   if (state.sup) p.set("supported", state.sup);
   if (state.tags.length) p.set("tags", state.tags.join(","));
@@ -135,14 +151,16 @@ async function loadModels(append = false) {
   const rel = state.releases.find((r) => r.release === state.release);
   const who = (state.release !== null ? rel?.creator : state.creator) || (state.creator === "" ? "No creator" : "");
   const src = { mmf: "MyMiniFactory", missing: "Not in your library", local: "Without MyMiniFactory" }[state.source];
-  $("#crumbs").textContent = [src, who, state.release ?? "All releases"].filter(Boolean).join(" / ") + ` · ${state.total} models`;
-  // A release only on MyMiniFactory has nothing in the library to set a creator or tags on.
+  $("#crumbs").textContent = [state.scope === "mine" && "My models", src, who, state.release ?? "All releases"].filter(Boolean).join(" / ") + ` · ${state.total} models`;
+  // A release only on MyMiniFactory has nothing in the library to set a creator or tags on;
+  // one with only other people's models has nothing you can change.
   const onlyMmf = state.release !== null && !rel;
-  $("#releaseCreatorBtn").classList.toggle("hidden", onlyMmf || state.release === null && state.creator !== "");
+  const noneMine = state.release !== null && state.items.length && !state.items.some((m) => m.can_edit);
+  $("#releaseCreatorBtn").classList.toggle("hidden", onlyMmf || noneMine || state.release === null && state.creator !== "");
   $("#releaseCreatorBtn").textContent = state.release === null ? "Set creator for several" : "Set creator";
   $("#renameCreatorBtn").classList.toggle("hidden", !state.creator || state.release !== null);
   $("#activeTags").innerHTML = state.tags.map((t) => `<span class="badge tag on" data-tag="${esc(t)}" title="Remove filter">${esc(t)} ✕</span>`).join("");
-  $("#releaseTagBtn").classList.toggle("hidden", state.release === null);
+  $("#releaseTagBtn").classList.toggle("hidden", state.release === null || noneMine);
   $("#combineBtn").classList.toggle("hidden", state.total < 2 || !!state.picked);
   $("#modelList").innerHTML = [...new Set(state.items.filter((m) => !m.mmf).map((m) => m.model))].map((m) => `<option value="${esc(m)}">`).join("");
   const empty = $("#empty");
@@ -150,6 +168,7 @@ async function loadModels(append = false) {
     const st = await api("/api/status");
     empty.innerHTML = state.source === "mmf" || state.source === "missing"
       ? (state.mmf?.total ? "Nothing on MyMiniFactory matches." : "Your MyMiniFactory library hasn't been synced yet. Click <b>Sync</b> next to MyMiniFactory in the sidebar.")
+      : st.files && state.scope === "mine" ? "None of your models match." + (state.q || state.tags.length || state.release !== null || state.creator !== null ? "" : "<br><br>Click <b>Import files</b> to upload some.")
       : st.files ? "No models match." :
       `Your library is empty.<br><br>Click <b>Import files</b>, or drop model files, folders or .zip / .7z archives anywhere on this page.`;
     empty.classList.remove("hidden");
@@ -160,7 +179,7 @@ async function loadReleaseImages() {
   const el = $("#releaseImages");
   const release = state.release;
   const local = release !== null && state.releases.some((r) => r.release === release);
-  const imgs = !local ? [] : await api(`/api/releases/images?release=${encodeURIComponent(release)}`);
+  const imgs = !local ? [] : await api(`/api/releases/images?${new URLSearchParams({ release, scope: state.scope })}`);
   if (release !== state.release) return;
   state.releaseImages = imgs;
   el.innerHTML = `<div class="side-title">Release images</div><div class="strip">` + imgs.map((i) => `<button class="rimg ${i.main ? "main" : ""}" data-pic="${i.id}" title="${esc(i.path)}">
@@ -184,12 +203,15 @@ async function openPicture(pic) {
   $("#lbMainModel").classList.toggle("hidden", !fromModel);
   $("#lbMainModel").classList.toggle("on", !!(fromModel && pic.main_model));
   $("#lbMainRelease").classList.toggle("on", !!(pic.main_release || pic.main));
+  // Only the picture's owner (or an admin) can say where it belongs.
+  $("#lightbox").classList.toggle("read-only", !(state.me.is_admin || pic.owner === state.me.id));
   $("#lightbox").showModal();
   const res = await api(`/api/models?${new URLSearchParams({ release: pic.release, limit: 1000, source: "local" })}`);
   if (state.picture !== pic) return;
-  sel.innerHTML += res.items.map((m) => `<option value="${esc(m.id)}">${esc(m.model)}</option>`).join("");
+  const models = res.items.filter((m) => m.owner === pic.owner);
+  sel.innerHTML += models.map((m) => `<option value="${esc(m.id)}">${esc(m.model)}</option>`).join("");
   sel.value = pic.scope === "model" ? pic.model_id : "";
-  sel.models = res.items;
+  sel.models = models;
 }
 $("#lightbox").addEventListener("click", (e) => { if (!e.target.closest(".lb-bar")) $("#lightbox").close(); });
 
@@ -225,7 +247,7 @@ $("#grid").addEventListener("click", (e) => {
   const c = e.target.closest(".card"); if (!c) return;
   const m = c.dataset.mmf ? state.items.find((x) => x.mmf && String(x.id) === c.dataset.mmf) : state.items.find((x) => x.id === c.dataset.id);
   if (!state.picked) { if (m?.mmf) openMmfItem(m); else openModel(c.dataset.id); return; }
-  if (!m) return;
+  if (!m || !(m.mmf || m.can_edit)) return;  // other people's models can't be changed
   const key = pickKey(m);
   if (state.picked.has(key)) state.picked.delete(key); else state.picked.set(key, m);
   c.classList.toggle("picked", state.picked.has(key));
@@ -250,8 +272,9 @@ function showPicked() {
   $("#bulkGo").disabled = !n;
   // Only models of one release can become one model; MyMiniFactory items can only be tagged.
   const online = [...state.picked.values()].some((m) => m.mmf);
-  $("#combineGo").disabled = n < 2 || pickedReleases().size > 1 || online;
-  $("#combineGo").title = online ? "MyMiniFactory items can't be combined" : "";
+  const owners = new Set([...state.picked.values()].map((m) => m.owner));
+  $("#combineGo").disabled = n < 2 || pickedReleases().size > 1 || online || owners.size > 1;
+  $("#combineGo").title = online ? "MyMiniFactory items can't be combined" : owners.size > 1 ? "Only one person's models can be combined" : "";
 }
 $("#combineBtn").onclick = () => {
   state.picked = new Map();
@@ -262,8 +285,8 @@ $("#combineBtn").onclick = () => {
 };
 $("#selectCancel").onclick = endPicking;
 $("#selectAll").onclick = () => {
-  state.items.forEach((m) => state.picked.set(pickKey(m), m));
-  document.querySelectorAll("#grid .card").forEach((c) => c.classList.add("picked"));
+  state.items.filter((m) => m.mmf || m.can_edit).forEach((m) => state.picked.set(pickKey(m), m));
+  document.querySelectorAll("#grid .card:not(.locked)").forEach((c) => c.classList.add("picked"));
   showPicked();
 };
 $("#combineGo").onclick = () => {
@@ -297,6 +320,7 @@ $("#bulkDlg form").addEventListener("submit", async (e) => {
   if (f.clearCreator.checked) body.creator = "";
   else if (f.creator.value.trim()) body.creator = f.creator.value.trim();
   if (f.supported.value !== "") body.supported = +f.supported.value;
+  if (f.public.value !== "") body.public = f.public.value === "1";
   if (f.hide.checked) {
     if (!confirm(`Hide ${body.model_ids.length} models from the library? (Files stay on disk; undo from Corrections.)`)) return;
     body.hidden = 1;
@@ -329,6 +353,7 @@ async function refresh() { loadCreators(); loadTags(); loadMmfSide(); await load
 const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe", group: "Group", mmfplus: "MMF+", free: "Free" };
 
 async function loadMmfSide() {
+  if (!state.me?.is_admin) return;  // the MyMiniFactory library is the admin's
   const s = await api("/api/mmf/status");
   state.mmf = s;
   const li = (src, label, n) => `<li data-src="${src}" class="${state.source === src ? "active" : ""}">
@@ -399,6 +424,7 @@ async function openMmfModel(id) {
   stop3d();
   const dlg = $("#modelDlg");
   dlg.classList.add("mmf-mode");
+  dlg.classList.remove("read-only");
   const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))];
   $("#mName").textContent = m.name;
   const when = /^\d/.test(m.published || "") ? " · published " + new Date(m.published).toLocaleDateString() : "";
@@ -499,7 +525,7 @@ window.addEventListener("focus", () => { if (!document.querySelector("dialog[ope
 // ------------------------------------------------------------ tags
 
 async function loadTags() {
-  const tags = await api("/api/tags");
+  const tags = await api(`/api/tags?${new URLSearchParams({ scope: state.scope })}`);
   $("#tagOptions").innerHTML = tags.map((t) => `<option value="${esc(t.tag)}">`).join("");
   $("#tagList").innerHTML = tags.length
     ? tags.map((t) => `<li class="badge tag ${state.tags.some((x) => x.toLowerCase() === t.tag.toLowerCase()) ? "on" : ""}" data-tag="${esc(t.tag)}">${esc(t.tag)} <span class="muted">${t.models}</span></li>`).join("")
@@ -566,7 +592,10 @@ $("#releaseTagDlg").addEventListener("close", async () => {
 
 async function openCreators(releases, preset = "", onlyWithout = false) {
   const dlg = $("#creatorDlg"), form = $("form", dlg);
-  const all = await api(onlyWithout ? "/api/releases?creator=&source=local" : "/api/releases?source=local");
+  // Only releases with models of yours (an admin can set any)
+  const p = new URLSearchParams({ source: "local", scope: state.me.is_admin ? state.scope : "mine" });
+  if (onlyWithout) p.set("creator", "");
+  const all = await api(`/api/releases?${p}`);
   form.reset();
   form.creator.value = preset;
   const checked = new Set(releases);
@@ -701,6 +730,8 @@ document.querySelectorAll("#creators, #releases, #tagList").forEach((ul) => ul.a
 
 function sectionNow() {
   const set = (sec, text) => { const el = $(`.side-title[data-sec="${sec}"] .sec-now`); if (el) el.textContent = text ? `· ${text}` : ""; };
+  set("show", state.scope === "mine" ? "My models" : "");
+  document.querySelectorAll("#scopeList li").forEach((li) => li.classList.toggle("active", li.dataset.scope === state.scope));
   set("creators", state.creator === null ? "" : state.creator || "No creator");
   set("releases", state.release || "");
   set("mmf", { mmf: "Only MyMiniFactory", missing: "Not in your library", local: "Hidden" }[state.source] || "");
@@ -797,6 +828,8 @@ async function openModel(id) {
   if (!same) state.view = { fmt: prefs.preferred_format, sup: prefs.preferred_support };
   $("#mName").textContent = m.model;
   $("#mRelease").textContent = (m.creator ? m.creator + " / " : "") + m.release;
+  $("#modelDlg").classList.toggle("read-only", !m.can_edit);
+  renderOwner();
   $("#editForm").classList.add("hidden");
   $("#mTagInput").value = "";
   renderModelTags();
@@ -809,6 +842,23 @@ async function openModel(id) {
   const dlg = $("#modelDlg");
   if (!dlg.open) dlg.showModal();
 }
+
+// Who uploaded the model and who can see it; its owner (or an admin) switches public / private.
+function renderOwner() {
+  const m = state.model;
+  const who = m.mine ? "Yours" : `Uploaded by ${m.owner_name || "someone"}`;
+  $("#mOwner").textContent = hasOthers() || !m.mine
+    ? `${who} · ${m.public ? "public: everyone can see it" : m.mine ? "private: only you can see it" : `private: only ${m.owner_name} can see it`}` : "";
+  $("#mVisBtn").textContent = m.public ? "Make private" : "Make public";
+  $("#mVisBtn").title = m.public ? "Only its owner will see this model" : "Everyone who logs in will see this model";
+}
+$("#mVisBtn").onclick = async () => {
+  const m = state.model;
+  await api(`/api/models/${m.id}/visibility`, { method: "PUT", body: JSON.stringify({ public: !m.public }) });
+  m.public = !m.public;
+  renderOwner();
+  state.dirty = true;
+};
 
 function renderFiles() {
   const m = state.model;
@@ -1004,7 +1054,9 @@ function openFileEdit(f) {
   $("#fPath").textContent = f.path;
   const parts = f.path.split("/");
   const scopes = [[f.path, "Just this file"]];
-  for (let i = parts.length - 1; i >= 1; i--) scopes.push([parts.slice(0, i).join("/"), `Everything in ${parts.slice(0, i).join(" / ")}`]);
+  // In someone's own folder (_users/<name>/...), corrections stop at that folder.
+  const top = parts[0] === "_users" && parts.length > 2 ? 2 : 1;
+  for (let i = parts.length - 1; i >= top; i--) scopes.push([parts.slice(0, i).join("/"), `Everything in ${parts.slice(0, i).join(" / ")}`]);
   form.scope.innerHTML = scopes.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
   $("#fileDlg").showModal();
   form.onsubmit = null;
@@ -1269,7 +1321,9 @@ async function pollStatus() {
     } else if (pending) {
       el.textContent = `Rendering previews: ${pv.ok || 0} done, ${pending} to go`;
     } else {
-      el.textContent = j.last?.error ? `Last ${j.last.job} failed: ${j.last.message}` : (j.last?.message || `${s.models} models · ${s.files} files`);
+      // The last job's message counts the whole library; other users see their own counts.
+      el.textContent = !state.me.is_admin ? `${s.models} models · ${s.files} files`
+        : j.last?.error ? `Last ${j.last.job} failed: ${j.last.message}` : (j.last?.message || `${s.models} models · ${s.files} files`);
     }
     el.title = el.textContent;
     $("#version").textContent = `v${s.version}${s.commit ? ` (${s.commit})` : ""}`;
@@ -1396,6 +1450,100 @@ $("#sourceImportBtn").onclick = async () => {
   try { await api("/api/import", { method: "POST" }); wasRunning = true; } catch (e) { alert(e.message); }
 };
 
-loadPrefs();
-refresh();
-pollStatus();
+// ------------------------------------------------------------ accounts
+
+async function loadMe() {
+  state.me = await api("/api/me");
+  const me = state.me;
+  document.body.classList.toggle("not-admin", !me.is_admin);
+  document.body.classList.toggle("admin-mode", me.admin_mode);
+  $("#adminMode").checked = me.admin_mode;
+  $("#userName").textContent = me.username;
+}
+$("#scopeList").addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-scope]"); if (!li) return;
+  state.scope = li.dataset.scope;
+  state.release = null;
+  $("#sidebar").classList.remove("open");
+  refresh();
+});
+$("#adminMode").onchange = async (e) => {
+  await api("/api/me/admin-mode", { method: "PUT", body: JSON.stringify({ on: e.target.checked }) });
+  await loadMe();
+  refresh();
+};
+$("#userBtn").onclick = () => {
+  $("#acTitle").textContent = state.me.username;
+  $("#acVisForm").default_public.value = state.me.default_public ? "1" : "0";
+  $("#acPwForm").reset();
+  $("#acVisMsg").textContent = $("#acPwMsg").textContent = "";
+  $("#accountDlg").showModal();
+};
+$("#acVisForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const pub = e.target.default_public.value === "1";
+  if (!confirm(`Make all your models ${pub ? "public, so everyone who logs in can see them" : "private, so only you can see them"}?`)) return;
+  await api("/api/me", { method: "PUT", body: JSON.stringify({ default_public: pub }) });
+  await loadMe();
+  $("#acVisMsg").textContent = "Done.";
+  refresh();
+});
+$("#acPwForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api("/api/me", { method: "PUT", body: JSON.stringify({ current_password: f.current.value, password: f.password.value }) });
+    f.reset();
+    $("#acPwMsg").textContent = "Password changed. Other devices were logged out.";
+  } catch (err) { $("#acPwMsg").textContent = err.message; }
+});
+$("#logoutBtn").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); location.reload(); };
+
+async function loadUsers() {
+  const users = await api("/api/users");
+  $("#usersTable").innerHTML = `<tr><th>User</th><th>Models</th><th></th></tr>` + users.map((u) => `<tr data-user="${u.id}">
+    <td>${esc(u.username)}${u.is_admin ? ` <span class="badge">${u.main_admin ? "main admin" : "admin"}</span>` : ""}</td>
+    <td>${u.models}</td>
+    <td><button data-act="password">Set password</button>
+      ${u.main_admin || u.id === state.me.id ? "" : `<button data-act="admin">${u.is_admin ? "Remove admin" : "Make admin"}</button>
+      <button data-act="remove">Remove</button>`}</td></tr>`).join("");
+  state.users = users;
+}
+$("#usersBtn").onclick = async () => {
+  $("#addUserForm").reset();
+  $("#addUserErr").textContent = "";
+  await loadUsers();
+  $("#usersDlg").showModal();
+};
+$("#usersTable").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const u = state.users.find((x) => x.id === +b.closest("tr").dataset.user);
+  try {
+    if (b.dataset.act === "password") {
+      const pw = prompt(`New password for ${u.username} (at least 6 characters). They'll be logged out everywhere.`);
+      if (!pw) return;
+      await api(`/api/users/${u.id}`, { method: "PUT", body: JSON.stringify({ password: pw }) });
+      alert(`Password changed for ${u.username}.`);
+    } else if (b.dataset.act === "admin") {
+      await api(`/api/users/${u.id}`, { method: "PUT", body: JSON.stringify({ is_admin: !u.is_admin }) });
+    } else if (b.dataset.act === "remove") {
+      if (!confirm(`Remove ${u.username}? They can't log in any more. Their ${u.models} models stay in the library, in their folder, and become yours (private).`)) return;
+      await api(`/api/users/${u.id}`, { method: "DELETE" });
+      refresh();
+    }
+  } catch (err) { alert(err.message); }
+  loadUsers();
+});
+$("#addUserForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api("/api/users", { method: "POST", body: JSON.stringify({ username: f.username.value, password: f.password.value, is_admin: f.is_admin.checked }) });
+    f.reset();
+    $("#addUserErr").textContent = "";
+    await loadMe();
+    loadUsers();
+  } catch (err) { $("#addUserErr").textContent = err.message; }
+});
+
+loadMe().then(() => { loadPrefs(); refresh(); pollStatus(); });

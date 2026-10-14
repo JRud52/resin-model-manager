@@ -287,9 +287,10 @@ class _Index:
         self.by_word: dict[str, list[int]] = {}
         seen_releases = set()
         # Creators renamed in the app count as one ("Lord of the Print" shown as "Rescale Miniatures").
+        # Only the main admin's models: the MyMiniFactory library is theirs.
         self.names = creator_names()
         for r in db.conn().execute("SELECT release, model, MAX(creator) creator, MIN(model_id) model_id "
-                                   "FROM files WHERE hidden=0 GROUP BY release, model"):
+                                   "FROM files WHERE hidden=0 AND owner=? GROUP BY release, model", (db.MAIN_ADMIN,)):
             creator = _tokens(r["creator"] or "")
             ckey = creator_key(display_creator(r["creator"] or "", self.names))
             if r["release"] not in seen_releases:
@@ -344,7 +345,7 @@ def _local_index() -> _Index:
     """Built once per change of the indexed files (and corrections), not per request."""
     global _index_cache
     sig = tuple(db.conn().execute(
-        "SELECT COUNT(*), MAX(id), TOTAL(length(release) + length(model) + length(creator) + hidden) FROM files"
+        "SELECT COUNT(*), MAX(id), TOTAL(length(release) + length(model) + length(creator) + hidden + owner) FROM files"
     ).fetchone()) + (tuple(sorted(creator_names().items())),)
     if _index_cache[0] != sig:
         _index_cache = (sig, _Index())

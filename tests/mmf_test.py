@@ -11,9 +11,12 @@ import urllib.request
 
 from playwright.sync_api import sync_playwright
 
+from login import login
+
 BASE = sys.argv[1].rstrip("/")
 SHOTS = sys.argv[2] if len(sys.argv) > 2 else None
 CDN = "https://cdn.example.com"
+TOKEN = login(BASE)
 
 
 def obj(i, name, creator="Dragon Forge", **extra):
@@ -149,6 +152,7 @@ def autotags(want):
 with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=os.environ.get("CHROMIUM") or None)
     ctx = browser.new_context(viewport={"width": 1280, "height": 860})
+    ctx.add_cookies([{"name": "rmm_session", "value": TOKEN, "url": BASE}])
     ctx.route("https://www.myminifactory.com/**", fake_mmf)
     ctx.route(f"{CDN}/**", lambda r: r.fulfill(status=404, body="") if "720X720-shaman" in r.request.url else r.fulfill(
         status=200, content_type="image/png", body=png(sum(map(ord, r.request.url.rsplit("/", 1)[1])) % 7)))

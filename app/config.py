@@ -38,3 +38,6 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 DB_PATH = DATA_DIR / "library.db"
 CACHE_DIR = DATA_DIR / "previews"
 TMP_DIR = DATA_DIR / "tmp"
+
+# Uploads by users other than the main admin go into LIBRARY_DIR/<USERS_FOLDER>/<username>/.
+USERS_FOLDER = "_users"
