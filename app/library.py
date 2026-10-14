@@ -109,8 +109,14 @@ def user_root(path: str) -> str | None:
     return f"{parts[0]}/{parts[1]}" if len(parts) > 2 and parts[0] == config.USERS_FOLDER else None
 
 
-def user_folder(username: str) -> str:
-    return f"{config.USERS_FOLDER}/{username}"
+def new_user_folder(username: str) -> str:
+    """A folder for a new account's uploads that no one has had before (a removed account's
+    folder keeps its models, so someone new with the same name gets ``name-2``)."""
+    taken = {r[0].casefold() for r in db.conn().execute("SELECT folder FROM folder_owners")}
+    folder, n = f"{config.USERS_FOLDER}/{username}", 2
+    while folder.casefold() in taken or (config.LIBRARY_DIR / folder).exists():
+        folder, n = f"{config.USERS_FOLDER}/{username}-{n}", n + 1
+    return folder
 
 
 def _inner(path: str) -> tuple[str, str]:
@@ -120,14 +126,64 @@ def _inner(path: str) -> tuple[str, str]:
 
 
 def owner_ids() -> dict[str, int]:
-    """users folder name (casefolded) -> user id."""
-    return {r["username"].casefold(): r["id"] for r in db.conn().execute("SELECT id, username FROM users")}
+    """folder -> owner, from folder_owners."""
+    return {r["folder"]: r["owner"] for r in db.conn().execute("SELECT folder, owner FROM folder_owners")}
 
 
 def owner_of(path: str, owners: dict[str, int]) -> int:
-    """Who a file belongs to: the user whose folder it is in, else the main admin."""
-    root = user_root(path)
-    return owners.get(root.split("/", 1)[1].casefold(), db.MAIN_ADMIN) if root else db.MAIN_ADMIN
+    """Who a file belongs to: the owner of the nearest folder in folder_owners (a user's own
+    folder, a removed user's, or a model an admin claimed), else the main admin."""
+    if not user_root(path):
+        return db.MAIN_ADMIN
+    p = path
+    while p:
+        if p in owners:
+            return owners[p]
+        p = p.rpartition("/")[0]
+    return db.MAIN_ADMIN
+
+
+def move_release_keys(old: int, new: int):
+    """Release creators and release main pictures set by `old` now count for `new`."""
+    c = db.conn()
+    for table, col, extra in (("release_creators", "release", ""), ("main_pictures", "key", " AND kind='release'")):
+        for r in c.execute(f"SELECT rowid AS rid, {col} AS k FROM {table} WHERE 1{extra}").fetchall():
+            release, sep, owner = r["k"].rpartition("\x00")
+            mine = (owner == str(old)) if sep else old == db.MAIN_ADMIN
+            if mine:
+                c.execute(f"UPDATE OR IGNORE {table} SET {col}=? WHERE rowid=?",
+                          (release_key(release if sep else r["k"], new), r["rid"]))
+    c.commit()
+
+
+def claim(new_owner: int, model_ids: list[str] = (), folder: str = "") -> int:
+    """An admin takes over models of removed accounts: one model's folder each, or all of a
+    removed account's folder. Tags, combines and release settings come along; returns how many
+    models changed hands."""
+    c = db.conn()
+    rows = (list(_ids_in_chunks("SELECT id, model_id, model_root, release, model FROM files WHERE owner = 0 "
+                                "AND model_id IN (%s)", list(model_ids))) if model_ids else
+            [r for r in c.execute("SELECT id, model_id, model_root, release, model FROM files WHERE owner = 0")
+             if _under(r["model_root"], folder)] if folder else [])
+    if not rows:
+        return 0
+    before = {r["id"]: r["model_id"] for r in rows}
+    if folder:
+        c.executemany("UPDATE folder_owners SET owner = ? WHERE folder = ?",
+                      [(new_owner, f) for f, o in owner_ids().items() if o == db.REMOVED_USER and _under(f, folder)])
+    for root in {r["model_root"] for r in rows} if not folder else ():
+        c.execute("INSERT OR REPLACE INTO folder_owners(folder, owner) VALUES (?, ?)", (root, new_owner))
+    for release, model in {(r["release"], r["model"]) for r in rows}:
+        cb = combine_for(release, model, db.REMOVED_USER)
+        if cb:
+            c.execute("UPDATE model_combines SET owner = ? WHERE id = ?", (new_owner, cb["id"]))
+    for release in {r["release"] for r in rows}:  # the removed account's release settings, for these releases
+        for table, col in (("release_creators", "release"), ("main_pictures", "key")):
+            c.execute(f"UPDATE OR IGNORE {table} SET {col} = ? WHERE {col} = ?",
+                      (release_key(release, new_owner), release_key(release, db.REMOVED_USER)))
+    c.commit()
+    _regroup(before)
+    return len(set(before.values()))
 
 
 def release_key(release: str, owner: int) -> str:
@@ -316,7 +372,7 @@ async def save_upload(rel: str, size: int, chunks, depth: int = 0, folder: str =
     """Stream an uploaded file into the library. An identical-size file already
     there is kept as is; a different file with the same name gets a numbered name.
     `depth` is the layout of the uploaded path: 0 Release/..., 1 Creator/Release/...
-    `folder` is the uploader's own folder (user_folder), '' for the main library."""
+    `folder` is the uploader's own folder (users.folder), '' for the main library."""
     target = upload_target(f"{folder}/{rel}" if folder else rel)
     record_layout(target.relative_to(config.LIBRARY_DIR.resolve()).as_posix(), depth)
     if target.exists():
@@ -850,13 +906,12 @@ def set_visibility(model_ids: list[str], public: bool):
     reclassify()
 
 
-def clear_visibility(user_id: int, username: str):
+def clear_visibility(user_id: int):
     """Drop a user's per-model public/private choices, so all their models follow their default."""
     c = db.conn()
-    mine = user_folder(username)
-    for p in visibility_rules():
-        if (_under(p, mine) if user_id != db.MAIN_ADMIN else not _under(p, config.USERS_FOLDER)):
-            c.execute("DELETE FROM visibility WHERE prefix = ?", (p,))
+    rules = visibility_rules()
+    for p in {r["model_root"] for r in c.execute("SELECT DISTINCT model_root FROM files WHERE owner = ?", (user_id,))}:
+        c.executemany("DELETE FROM visibility WHERE prefix = ?", [(q,) for q in rules if _under(q, p)])
     c.commit()
 
 

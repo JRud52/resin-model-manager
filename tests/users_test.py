@@ -75,27 +75,43 @@ assert admin.get("/api/me")["is_admin"]
 assert Client().status_of("POST", "/api/auth/setup", {"username": "x", "password": "123456"}) == 409, "setup only once"
 assert Client().status_of("POST", "/api/auth/login", {"username": ADMIN, "password": "nope"}) == 401
 
-users = {u["username"]: u for u in admin.get("/api/users")}
+def claim_removed():
+    """Claims what removed accounts left (from an earlier run too), and makes it private again."""
+    for r in admin.get("/api/users")["removed"]:
+        admin.post("/api/models/claim", {"folder": r["folder"]})
+    admin.put("/api/me/admin-mode", {"on": True})
+    claimed = [m["id"] for m in admin.models(scope="mine").values() if m["public"]]
+    if claimed:
+        admin.post("/api/models/bulk", {"model_ids": claimed, "public": False})
+    admin.put("/api/me/admin-mode", {"on": False})
+
+
+users = {u["username"]: u for u in admin.get("/api/users")["users"]}
 for name in ("bob", "carol"):
     if name in users:
         admin.call("DELETE", f"/api/users/{users[name]['id']}")
     admin.post("/api/users", {"username": name, "password": f"{name}-pass"})
+claim_removed()
+admin.post("/api/releases/creator", {"releases": ["Shared Release"], "creator": ""})  # left by an earlier run's claim
+assert admin.status_of("POST", "/api/users", {"username": "user_removed", "password": "whatever"}) == 400
 assert admin.status_of("POST", "/api/users", {"username": "bob", "password": "whatever"}) == 400, "names are unique"
 assert admin.status_of("POST", "/api/users", {"username": "../x", "password": "whatever"}) == 400
 bob, carol = Client("bob", "bob-pass"), Client("carol", "carol-pass")
 assert not bob.get("/api/me")["is_admin"]
+BOB = bob.get("/api/me")["folder"]  # _users/bob, or bob-2 ... when an earlier bob was removed
+assert BOB.startswith("_users/bob"), BOB
 
 with tempfile.TemporaryDirectory() as td:
     M.write_stl(Path(td) / "s.stl", M.sphere(8, 40))
     stl = (Path(td) / "s.stl").read_bytes()
 # The same release and model names as the admin's: they stay separate models.
 admin.upload("Shared Release/Gnome/Gnome.stl", stl)
-assert bob.upload("Shared Release/Gnome/Gnome.stl", stl)["path"] == "_users/bob/Shared Release/Gnome/Gnome.stl"
+assert bob.upload("Shared Release/Gnome/Gnome.stl", stl)["path"] == f"{BOB}/Shared Release/Gnome/Gnome.stl"
 zbuf = io.BytesIO()
 with zipfile.ZipFile(zbuf, "w") as z:
     z.writestr("Orc/Supported/Orc.stl", stl)
     z.writestr("Troll/Troll.stl", stl)
-assert bob.upload("Orc Smiths/Bob Pack.zip", zbuf.getvalue(), depth=1)["path"] == "_users/bob/Orc Smiths/Bob Pack.zip"
+assert bob.upload("Orc Smiths/Bob Pack.zip", zbuf.getvalue(), depth=1)["path"] == f"{BOB}/Orc Smiths/Bob Pack.zip"
 bob.post("/api/index")
 bob.wait()
 
@@ -171,7 +187,7 @@ for method, u, body in (("PUT", "/api/settings", {"preview_size": 256}), ("GET",
                         ("PUT", "/api/me/admin-mode", {"on": True})):
     assert bob.status_of(method, u, body) == 403, u
 assert bob.get("/api/settings")["preferred_format"], "everyone reads the display preferences"
-assert all(o["prefix"].startswith("_users/bob") for o in bob.get("/api/overrides"))
+assert all(o["prefix"].startswith(BOB + "/") for o in bob.get("/api/overrides"))
 # Passwords
 assert bob.status_of("PUT", "/api/me", {"password": "new-pass", "current_password": "wrong"}) == 400
 bob.put("/api/me", {"password": "bob-pass2", "current_password": "bob-pass"})
@@ -180,15 +196,41 @@ assert Client().status_of("POST", "/api/auth/login", {"username": "bob", "passwo
 bob = Client("bob", "bob-pass2")
 print("admin only and passwords ok")
 
-# Removing an account: the files stay, the admin owns them, tags come along.
-bob_id = next(u["id"] for u in admin.get("/api/users") if u["username"] == "bob")
+# Removing an account: the models stay as user_removed's, public or private as they were, with their tags.
+bob_id = next(u["id"] for u in admin.get("/api/users")["users"] if u["username"] == "bob")
+bob.post("/api/models/bulk", {"model_ids": [bob.models()[("Bob Pack", "Cave Troll")]["id"]], "public": True})
 admin.call("DELETE", f"/api/users/{bob_id}")
 assert bob.status_of("GET", "/api/models") == 401, "logged out"
-admin.put("/api/me/admin-mode", {"on": False})
-left = {k: m for k, m in admin.models().items() if k[0] == "Bob Pack"}
-assert set(left) == {("Bob Pack", "Orc"), ("Bob Pack", "Cave Troll")}, left
+assert set(carol.models()) == {("Bob Pack", "Cave Troll")}, "a public model stays public"
+cave = carol.models()[("Bob Pack", "Cave Troll")]
+assert cave["owner_name"] == "user_removed" and not cave["can_edit"]
+assert carol.status_of("POST", "/api/models/claim", {"model_ids": [cave["id"]]}) == 403, "only admins claim"
+assert {(m["release"], m["model"]) for m in admin.get("/api/models?source=local&limit=1000")["items"]
+        if m["owner"] == 0} == {("Bob Pack", "Cave Troll")}, "the rest is private"
+admin.put("/api/me/admin-mode", {"on": True})
+left = {(m["release"], m["model"]): m for m in admin.get("/api/models?source=local&limit=1000")["items"] if m["owner"] == 0}
+assert set(left) == {("Bob Pack", "Orc"), ("Bob Pack", "Cave Troll"), ("Shared Release", "Gnome")}, left
 assert set(left[("Bob Pack", "Orc")]["tags"]) == {"painted by bob", "checked"}, "tags kept"
-assert left[("Bob Pack", "Orc")]["mine"]
+assert left[("Shared Release", "Gnome")]["creator"] == "Gnome Works", "release creator kept"
+assert all(m["can_edit"] and not m["mine"] for m in left.values()), "admins can still change them"
+removed = admin.get("/api/users")["removed"]
+assert {"folder": BOB, "models": 3} in removed, removed
+# A new account with the same name starts with a folder of its own.
+admin.post("/api/users", {"username": "bob", "password": "bob-pass"})
+assert Client("bob", "bob-pass").models(scope="mine") == {}
+# Claiming: one model, then everything left.
+admin.post("/api/models/claim", {"model_ids": [left[("Bob Pack", "Orc")]["id"]]})
+orc = admin.models(scope="mine")[("Bob Pack", "Orc")]
+assert {"painted by bob", "checked"} <= set(orc["tags"]) and orc["mine"], orc
+assert {(m["release"], m["model"]) for m in admin.get("/api/models?source=local&limit=1000")["items"]
+        if m["owner"] == 0} == {("Bob Pack", "Cave Troll"), ("Shared Release", "Gnome")}
+admin.post("/api/models/claim", {"folder": BOB})
+mine_now = admin.models(scope="mine")
+assert {("Bob Pack", "Cave Troll"), ("Shared Release", "Gnome")} <= set(mine_now)
+assert mine_now[("Shared Release", "Gnome")]["creator"] == "Gnome Works"
+assert BOB not in {r["folder"] for r in admin.get("/api/users")["removed"]}
+admin.put("/api/me/admin-mode", {"on": False})
+claim_removed()
 carol.post("/api/auth/logout")
 assert carol.status_of("GET", "/api/models") == 401
 print("USERS OK")

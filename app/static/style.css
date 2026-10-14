@@ -268,3 +268,6 @@ body.admin-mode .admin-toggle { color: var(--unsup); }
 #usersTable td, #usersTable th { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
 #usersTable td:last-child { text-align: right; white-space: nowrap; }
 #usersTable .badge { white-space: nowrap; }
+#removedTable { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+#removedTable td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+#removedTable td:last-child { text-align: right; }

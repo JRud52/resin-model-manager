@@ -99,7 +99,7 @@ def _check_edit(v: auth.Viewer, model_ids: list[str]) -> set[int]:
 
 def _check_prefix(v: auth.Viewer, prefix: str):
     """Non-admins can only put correction rules on paths in their own folder."""
-    if not v.is_admin and not library._under(prefix, library.user_folder(v.username)):
+    if not v.is_admin and not (v.folder and library._under(prefix, v.folder)):
         raise HTTPException(403, "You can only change your own models")
 
 
@@ -158,7 +158,7 @@ async def upload(request: Request, v: Me, path: str, size: int = -1, depth: int 
     """Save one file (raw request body) at `path` inside the library, or inside the uploader's
     own folder for anyone but the main admin.
     depth=1 when `path` starts with a creator folder (Creator/Release/...)."""
-    folder = "" if v.id == db.MAIN_ADMIN else library.user_folder(v.username)
+    folder = "" if v.id == db.MAIN_ADMIN else v.folder
     try:
         return await library.save_upload(path, size, request.stream(), depth, folder)
     except ValueError as e:
@@ -694,9 +694,8 @@ def add_override(o: OverrideIn, v: Me):
 
 @app.get("/api/overrides")
 def list_overrides(v: Me):
-    mine = library.user_folder(v.username)
     return [dict(r) for r in db.conn().execute("SELECT * FROM overrides ORDER BY prefix")
-            if v.is_admin or library._under(r["prefix"], mine)]
+            if v.is_admin or (v.folder and library._under(r["prefix"], v.folder))]
 
 
 @app.delete("/api/overrides/{oid}")
@@ -775,6 +774,7 @@ class BulkIn(BaseModel):
     supported: Optional[int] = None  # 1 / 0 / -1 (unknown)
     hidden: Optional[int] = None
     public: Optional[bool] = None   # who can see them: everyone, or only their owner
+    claim: bool = False             # an admin takes over those of removed accounts first
 
 
 @app.post("/api/models/bulk")
@@ -785,6 +785,13 @@ def bulk_edit(b: BulkIn, v: Me):
     if b.mmf_ids and not v.is_admin:
         raise HTTPException(403, "Only an admin can change MyMiniFactory items")
     _check_edit(v, b.model_ids)
+    if b.claim and b.model_ids:
+        if not v.is_admin:
+            raise HTTPException(403, "Only an admin can claim models")
+        files = [r["id"] for r in library._ids_in_chunks("SELECT id FROM files WHERE model_id IN (%s)", b.model_ids)]
+        library.claim(v.id, b.model_ids)
+        b.model_ids = sorted({r["model_id"] for r in library._ids_in_chunks(  # claimed models have new ids
+            "SELECT model_id FROM files WHERE id IN (%s)", files)})
     release = " ".join(b.release.split()) if b.release is not None else None
     if b.supported not in (None, 1, 0, -1):
         raise HTTPException(400, "Bad support value")
@@ -1051,7 +1058,7 @@ def update_me(body: MeIn, request: Request, v: Me):
             raise HTTPException(400, str(e))
     if body.default_public is not None:
         auth.update_user(v.id, default_public=body.default_public)
-        library.clear_visibility(v.id, v.username)
+        library.clear_visibility(v.id)
         library.reclassify()
     return auth.viewer(request.cookies.get(auth.COOKIE)).as_dict()
 
@@ -1078,7 +1085,13 @@ def list_users(v: Admin):
     c = db.conn()
     counts = {r["owner"]: r["n"] for r in c.execute(
         "SELECT owner, COUNT(DISTINCT model_id) n FROM files WHERE hidden=0 GROUP BY owner")}
-    return [{**u, "models": counts.get(u["id"], 0)} for u in auth.users()]
+    removed: dict[str, int] = {}  # removed accounts' folders with models still to claim
+    for r in c.execute("SELECT model_root, COUNT(DISTINCT model_id) n FROM files WHERE owner=? AND hidden=0 "
+                       "GROUP BY model_root", (db.REMOVED_USER,)):
+        root = library.user_root(r["model_root"]) or r["model_root"]
+        removed[root] = removed.get(root, 0) + r["n"]
+    return {"users": [{**u, "models": counts.get(u["id"], 0)} for u in auth.users()],
+            "removed": [{"folder": f, "models": n} for f, n in sorted(removed.items())]}
 
 
 @app.post("/api/users")
@@ -1087,8 +1100,6 @@ def add_user(body: UserIn, v: Admin):
         uid = auth.create_user(body.username, body.password or "", bool(body.is_admin))
     except ValueError as e:
         raise HTTPException(400, str(e))
-    if (config.LIBRARY_DIR / library.user_folder(body.username.strip())).exists():
-        library.reclassify()  # a folder left by an earlier account of that name is theirs now
     return {"id": uid}
 
 
@@ -1110,8 +1121,8 @@ def edit_user(user_id: int, body: UserIn, v: Admin):
 
 @app.delete("/api/users/{user_id}")
 def remove_user(user_id: int, v: Admin):
-    """Remove an account. Their files stay in the library, in their folder, and belong to the
-    main admin from then on (private, with their tags)."""
+    """Remove an account. Their models stay in the library, in their folder, as user_removed's
+    (public or private as they were, with their tags) until an admin claims them."""
     c = db.conn()
     before = {r["id"]: r["model_id"] for r in c.execute("SELECT id, model_id FROM files WHERE owner=?", (user_id,))}
     try:
@@ -1119,10 +1130,24 @@ def remove_user(user_id: int, v: Admin):
             raise HTTPException(404)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    c.execute("UPDATE model_combines SET owner=? WHERE owner=?", (db.MAIN_ADMIN, user_id))
+    c.execute("UPDATE model_combines SET owner=? WHERE owner=?", (db.REMOVED_USER, user_id))
     c.commit()
+    library.move_release_keys(user_id, db.REMOVED_USER)
     library._regroup(before)
     return {"ok": True}
+
+
+class ClaimIn(BaseModel):
+    model_ids: list[str] = []
+    folder: str = ""  # all of a removed account's models (their folder, from /api/users)
+
+
+@app.post("/api/models/claim")
+def claim_models(body: ClaimIn, v: Admin):
+    """An admin takes over models of removed accounts: they become theirs, in their library."""
+    if not body.model_ids and not body.folder.strip("/"):
+        raise HTTPException(400, "Pick the models to claim")
+    return {"models": library.claim(v.id, body.model_ids, body.folder.strip("/"))}
 
 
 # Changes with every image, so browsers fetch the new app.js/style.css after an

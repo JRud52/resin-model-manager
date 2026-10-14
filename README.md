@@ -22,8 +22,11 @@ groups them by **release** and **model**, separates **supported** and
   admin who ticks *Admin mode* in the header sees everyone's models, private ones
   too. Uploads by other users go into their own folder in the library,
   `_users/<username>/`, read like the top of the library, so two people's
-  releases with the same name never mix. Removing an account keeps its files;
-  they become the admin's (private, with their tags). A forgotten password is
+  releases with the same name never mix. Removing an account keeps its models,
+  with their tags and settings, now shown as uploaded by *user_removed*. An
+  admin can claim them into their own library with *Claim* in a model's window,
+  *Claim for my library* when editing several, or *Claim all* in *Users*. A new
+  account with the same name gets a fresh folder and doesn't see them. A forgotten password is
   reset by an admin, or for the admin itself with
   `docker exec -it resin-models python -m app.auth reset-password <username>`.
 * **Import files from the browser.** Click *Import files*, or drop files,

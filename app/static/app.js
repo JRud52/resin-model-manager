@@ -321,6 +321,7 @@ $("#bulkDlg form").addEventListener("submit", async (e) => {
   else if (f.creator.value.trim()) body.creator = f.creator.value.trim();
   if (f.supported.value !== "") body.supported = +f.supported.value;
   if (f.public.value !== "") body.public = f.public.value === "1";
+  if (f.claim.checked) body.claim = true;
   if (f.hide.checked) {
     if (!confirm(`Hide ${body.model_ids.length} models from the library? (Files stay on disk; undo from Corrections.)`)) return;
     body.hidden = 1;
@@ -849,9 +850,18 @@ function renderOwner() {
   const who = m.mine ? "Yours" : `Uploaded by ${m.owner_name || "someone"}`;
   $("#mOwner").textContent = hasOthers() || !m.mine
     ? `${who} · ${m.public ? "public: everyone can see it" : m.mine ? "private: only you can see it" : `private: only ${m.owner_name} can see it`}` : "";
+  $("#mClaimBtn").classList.toggle("hidden", !(state.me.is_admin && m.owner === 0));
   $("#mVisBtn").textContent = m.public ? "Make private" : "Make public";
   $("#mVisBtn").title = m.public ? "Only its owner will see this model" : "Everyone who logs in will see this model";
 }
+// Models of a removed account (owner 0, "user_removed") can be taken over by an admin.
+$("#mClaimBtn").onclick = async () => {
+  const m = state.model;
+  if (!confirm(`Claim ${m.model}? It becomes yours, part of your library.`)) return;
+  await api("/api/models/claim", { method: "POST", body: JSON.stringify({ model_ids: [m.id] }) });
+  $("#modelDlg").close();
+  refresh();
+};
 $("#mVisBtn").onclick = async () => {
   const m = state.model;
   await api(`/api/models/${m.id}/visibility`, { method: "PUT", body: JSON.stringify({ public: !m.public }) });
@@ -1500,7 +1510,10 @@ $("#acPwForm").addEventListener("submit", async (e) => {
 $("#logoutBtn").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); location.reload(); };
 
 async function loadUsers() {
-  const users = await api("/api/users");
+  const { users, removed } = await api("/api/users");
+  $("#removedUsers").classList.toggle("hidden", !removed.length);
+  $("#removedTable").innerHTML = removed.map((r) => `<tr data-folder="${esc(r.folder)}"><td class="path">${esc(r.folder)}</td>
+    <td>${r.models} model${r.models === 1 ? "" : "s"}</td><td><button data-claim>Claim all</button></td></tr>`).join("");
   $("#usersTable").innerHTML = `<tr><th>User</th><th>Models</th><th></th></tr>` + users.map((u) => `<tr data-user="${u.id}">
     <td>${esc(u.username)}${u.is_admin ? ` <span class="badge">${u.main_admin ? "main admin" : "admin"}</span>` : ""}</td>
     <td>${u.models}</td>
@@ -1527,12 +1540,20 @@ $("#usersTable").addEventListener("click", async (e) => {
     } else if (b.dataset.act === "admin") {
       await api(`/api/users/${u.id}`, { method: "PUT", body: JSON.stringify({ is_admin: !u.is_admin }) });
     } else if (b.dataset.act === "remove") {
-      if (!confirm(`Remove ${u.username}? They can't log in any more. Their ${u.models} models stay in the library, in their folder, and become yours (private).`)) return;
+      if (!confirm(`Remove ${u.username}? They can't log in any more. Their ${u.models} models stay in the library, shown as user_removed's, until an admin claims them.`)) return;
       await api(`/api/users/${u.id}`, { method: "DELETE" });
       refresh();
     }
   } catch (err) { alert(err.message); }
   loadUsers();
+});
+$("#removedTable").addEventListener("click", async (e) => {
+  const tr = e.target.closest("[data-claim]")?.closest("tr"); if (!tr) return;
+  if (!confirm(`Claim every model in ${tr.dataset.folder}? They become yours, part of your library.`)) return;
+  try { await api("/api/models/claim", { method: "POST", body: JSON.stringify({ folder: tr.dataset.folder }) }); }
+  catch (err) { alert(err.message); }
+  loadUsers();
+  refresh();
 });
 $("#addUserForm").addEventListener("submit", async (e) => {
   e.preventDefault();

@@ -105,6 +105,7 @@
       <div id="mOwner" class="small muted"></div>
     </div>
     <div class="spacer"></div>
+    <button id="mClaimBtn" class="admin-only hidden" title="Its account was removed: make it yours, in your library">Claim</button>
     <button id="mVisBtn" title="Who can see this model"></button>
     <button id="mMapBtn" class="admin-only" title="Say which folders in the path are the creator, release and model">Map folders</button>
     <button id="mEditBtn">Edit</button>
@@ -336,6 +337,7 @@
         <option value="0">Private: only the owner</option>
       </select>
     </label>
+    <label class="check admin-only"><input type="checkbox" name="claim"> Claim the ones from removed accounts (they become yours)</label>
     <label class="check"><input type="checkbox" name="hide"> Hide these models (undo from Corrections)</label>
     <p class="muted small">Changes are stored as correction rules and survive new imports; your files are never renamed.</p>
     <p class="small err" id="bulkErr"></p>
@@ -425,6 +427,13 @@
     everyone's public ones; uploads go into their own folder in the library (<code>_users/&lt;username&gt;</code>).
     Admins can change anyone's models, keep the settings, and see everything in admin mode.</p>
   <table id="usersTable"></table>
+  <div id="removedUsers" class="hidden">
+    <h3>From removed accounts</h3>
+    <p class="muted small">Models of removed accounts stay in the library as <b>user_removed</b>'s. Claim them to make them yours,
+      all at once here, or one by one with <b>Claim</b> in a model's window (or <b>Select models</b> → <b>Edit…</b>).
+      Turn on admin mode to see the private ones.</p>
+    <table id="removedTable"></table>
+  </div>
   <form id="addUserForm" class="card-form">
     <h3>Add someone</h3>
     <label>Username <input name="username" autocomplete="off" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,31}" title="Letters, digits, dots, dashes or underscores"></label>

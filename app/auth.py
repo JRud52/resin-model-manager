@@ -15,7 +15,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from . import db
+from . import db, library
 
 COOKIE = "rmm_session"
 SESSION_DAYS = 365
@@ -42,6 +42,8 @@ def check_username(name: str) -> str:
     name = name.strip()
     if not USERNAME.match(name):
         raise ValueError("A username is 1 to 32 letters, digits, dots, dashes or underscores")
+    if name.casefold() == db.REMOVED_NAME:
+        raise ValueError(f"{name} is kept for the models of removed accounts")
     return name
 
 
@@ -59,6 +61,7 @@ class Viewer:
     is_admin: bool
     admin_mode: bool  # an admin seeing every model, private ones too
     default_public: bool
+    folder: str  # where their uploads go; '' = the library itself (the main admin)
 
     @property
     def sees_all(self) -> bool:
@@ -69,7 +72,7 @@ class Viewer:
 
     def as_dict(self) -> dict:
         return {"id": self.id, "username": self.username, "is_admin": self.is_admin,
-                "admin_mode": self.sees_all, "default_public": self.default_public,
+                "admin_mode": self.sees_all, "default_public": self.default_public, "folder": self.folder,
                 "main_admin": self.id == db.MAIN_ADMIN}
 
 
@@ -83,8 +86,11 @@ def create_user(username: str, password: str, is_admin: bool = False) -> int:
     if c.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
         raise ValueError(f"There is already a user called {username}")
     first = setup_needed()
-    cur = c.execute("INSERT INTO users(id, username, password, is_admin) VALUES (?, ?, ?, ?)",
-                    (db.MAIN_ADMIN if first else None, username, hash_password(password), int(is_admin or first)))
+    folder = "" if first else library.new_user_folder(username)  # the main admin's uploads go in the library itself
+    cur = c.execute("INSERT INTO users(id, username, password, is_admin, folder) VALUES (?, ?, ?, ?, ?)",
+                    (db.MAIN_ADMIN if first else None, username, hash_password(password), int(is_admin or first), folder))
+    if folder:
+        c.execute("INSERT INTO folder_owners(folder, owner) VALUES (?, ?)", (folder, cur.lastrowid))
     c.commit()
     return cur.lastrowid
 
@@ -122,7 +128,7 @@ def viewer(token: str | None) -> Viewer | None:
     if not token:
         return None
     c = db.conn()
-    row = c.execute("""SELECT u.id, u.username, u.is_admin, u.default_public, s.admin_mode, s.seen
+    row = c.execute("""SELECT u.id, u.username, u.is_admin, u.default_public, u.folder, s.admin_mode, s.seen
                        FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?""",
                     (_token_key(token),)).fetchone()
     if not row or row["seen"] < time.time() - SESSION_DAYS * 86400:
@@ -130,7 +136,8 @@ def viewer(token: str | None) -> Viewer | None:
     if row["seen"] < time.time() - 3600:  # keeps the session alive while it is used
         c.execute("UPDATE sessions SET seen = ? WHERE token = ?", (time.time(), _token_key(token)))
         c.commit()
-    return Viewer(row["id"], row["username"], bool(row["is_admin"]), bool(row["admin_mode"]), bool(row["default_public"]))
+    return Viewer(row["id"], row["username"], bool(row["is_admin"]), bool(row["admin_mode"]),
+                  bool(row["default_public"]), row["folder"])
 
 
 def set_admin_mode(token: str, on: bool):
@@ -145,7 +152,9 @@ def users() -> list[dict]:
 
 
 def usernames() -> dict[int, str]:
-    return {r["id"]: r["username"] for r in db.conn().execute("SELECT id, username FROM users")}
+    """user id -> name, with removed accounts' models under db.REMOVED_NAME."""
+    return {db.REMOVED_USER: db.REMOVED_NAME,
+            **{r["id"]: r["username"] for r in db.conn().execute("SELECT id, username FROM users")}}
 
 
 def set_password(user_id: int, password: str, end_sessions: bool = True, keep: str | None = None):
@@ -171,7 +180,8 @@ def update_user(user_id: int, is_admin: bool | None = None, default_public: bool
 
 
 def delete_user(user_id: int) -> bool:
-    """Remove an account. Their files stay in the library and belong to the main admin from then on."""
+    """Remove an account. Their files stay in the library, owned by db.REMOVED_USER until an admin
+    claims them (library.claim)."""
     if user_id == db.MAIN_ADMIN:
         raise ValueError("The main admin can't be removed")
     c = db.conn()
@@ -179,6 +189,7 @@ def delete_user(user_id: int) -> bool:
         return False
     c.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     c.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    c.execute("UPDATE folder_owners SET owner = ? WHERE owner = ?", (db.REMOVED_USER, user_id))
     c.commit()
     return True
 

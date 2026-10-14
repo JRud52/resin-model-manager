@@ -186,7 +186,16 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT NOT NULL,          -- pbkdf2_sha256$iterations$salt$hash
     is_admin INTEGER NOT NULL DEFAULT 0,
     default_public INTEGER NOT NULL DEFAULT 0, -- their models without a visibility rule are public
+    folder TEXT NOT NULL DEFAULT '',  -- where their uploads go (_users/<username>); '' for the main admin
     created REAL DEFAULT (strftime('%s','now'))
+);
+
+-- Who owns what is in users' folders: their own folder when the account is made, REMOVED_USER
+-- once the account is removed, and an admin for what they claimed (a whole folder or one model's
+-- folder). Longest prefix wins; anything else belongs to the main admin.
+CREATE TABLE IF NOT EXISTS folder_owners (
+    folder TEXT PRIMARY KEY,
+    owner INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -227,6 +236,9 @@ CREATE TABLE IF NOT EXISTS overrides (
 
 # users.id of the main admin: the first account, made on the first visit.
 MAIN_ADMIN = 1
+# Owner of the models of a removed account, until an admin claims them; shown as REMOVED_NAME.
+REMOVED_USER = 0
+REMOVED_NAME = "user_removed"
 
 _local = threading.local()
 
@@ -254,6 +266,12 @@ def init():
         if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
             c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     c.execute("CREATE INDEX IF NOT EXISTS files_owner ON files(owner)")
+    if "folder" not in {r["name"] for r in c.execute("PRAGMA table_info(users)")}:
+        c.execute("ALTER TABLE users ADD COLUMN folder TEXT NOT NULL DEFAULT ''")
+    for r in c.execute("SELECT id, username FROM users WHERE folder = '' AND id != ?", (MAIN_ADMIN,)).fetchall():
+        folder = f"{config.USERS_FOLDER}/{r['username']}"
+        c.execute("UPDATE users SET folder = ? WHERE id = ?", (folder, r["id"]))
+        c.execute("INSERT OR IGNORE INTO folder_owners(folder, owner) VALUES (?, ?)", (folder, r["id"]))
     if "creator" not in {r["name"] for r in c.execute("PRAGMA table_info(overrides)")}:
         c.execute("ALTER TABLE overrides ADD COLUMN creator TEXT")
     mmf_cols = {r["name"] for r in c.execute("PRAGMA table_info(mmf_items)")}
