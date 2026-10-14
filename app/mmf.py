@@ -9,6 +9,7 @@ bookmarklet (it has the login) on its next run and uploaded into the library.
 Every user syncs their own MyMiniFactory account: an item is theirs through their rows in
 mmf_links (`owner`), and is matched against the models they uploaded. The items themselves
 (names, pictures, the site's tags) are shared, since they are the same for everyone who has them.
+Others see a user's items like their models: the public ones, or all of them in admin mode.
 """
 from __future__ import annotations
 
@@ -222,6 +223,30 @@ def clear(owner: int, forget: bool = False):
         if forget:
             c.execute("DELETE FROM mmf_item_tags WHERE owner=?", (owner,))
             c.execute("DELETE FROM mmf_autotagged WHERE owner=?", (owner,))
+            c.execute("DELETE FROM mmf_visibility WHERE owner=?", (owner,))
+
+
+def _public(owner: int) -> tuple[bool, dict[int, bool]]:
+    """The owner's default for their items, and the items they chose for one by one."""
+    c = db.conn()
+    row = c.execute("SELECT default_public FROM users WHERE id=?", (owner,)).fetchone()
+    return bool(row and row[0]), {r[0]: bool(r[1]) for r in c.execute(
+        "SELECT item_id, public FROM mmf_visibility WHERE owner=?", (owner,))}
+
+
+def set_visibility(owner: int, ids: list[int], public: bool):
+    c = db.conn()
+    with c:
+        c.executemany("INSERT INTO mmf_visibility(owner, item_id, public) VALUES (?,?,?) "
+                      "ON CONFLICT(owner, item_id) DO UPDATE SET public=excluded.public",
+                      [(owner, i, int(public)) for i in ids])
+
+
+def clear_visibility(owner: int):
+    """Back to the owner's default for all their items."""
+    c = db.conn()
+    with c:
+        c.execute("DELETE FROM mmf_visibility WHERE owner=?", (owner,))
 
 
 # ---------------------------------------------------------------- matching to the local library
@@ -416,9 +441,11 @@ def _matched_items(owner: int, q: str = "", creator: str | None = None) -> list[
     for r in c.execute("SELECT * FROM mmf_links WHERE owner=? ORDER BY source, collection", (owner,)):
         link_map.setdefault(r["item_id"], []).append({"source": r["source"], "collection": r["collection"]})
     index = _local_index(owner)
+    default, chosen = _public(owner)
     out = []
     for r in rows:
         d = _item(r, owner, names, own)
+        d["owner"], d["public"] = owner, chosen.get(r["id"], default)
         d["sources"] = link_map.get(r["id"], [])
         d["local"] = _match(r["name"], d["creator"], index)
         d["release"] = _release_of(d)
@@ -438,18 +465,37 @@ def items(owner: int, q: str = "", missing: bool = False, offset: int = 0, limit
     return {"total": len(out), "items": out[offset:offset + limit]}
 
 
+def seen_items(viewer: int, everyone: bool = False, mine_only: bool = False, q: str = "",
+               creator: str | None = None) -> list[dict]:
+    """The items `viewer` sees: their own, and the public ones of everyone else (all of them for
+    `everyone`, an admin in admin mode; none with `mine_only`). An item in several people's
+    libraries is listed once, the viewer's own first."""
+    owners = [viewer]
+    if not mine_only:
+        owners += [r[0] for r in db.conn().execute(
+            "SELECT DISTINCT owner FROM mmf_links WHERE owner != ? ORDER BY owner", (viewer,))]
+    out, seen = [], set()
+    for owner in owners:
+        for d in _matched_items(owner, q, creator):
+            if d["id"] not in seen and (owner == viewer or everyone or d["public"]):
+                seen.add(d["id"])
+                out.append(d)
+    return out
+
+
 def newest_first(items: list[dict]) -> list[dict]:
     """Items by published date, newest first; items without one after them, by name."""
     return sorted(sorted(items, key=lambda d: d["name"].casefold()),
                   key=lambda d: d["published"] if d["published"][:1].isdigit() else "", reverse=True)
 
 
-def grid_items(owner: int, q: str = "", creator: str | None = None, release: str | None = None, source: str = "",
+def grid_items(seen: tuple, q: str = "", creator: str | None = None, release: str | None = None, source: str = "",
                tags: list[str] = ()) -> list[dict]:
-    """Items for the main grid, shown like local models. source '' or 'missing': items not in the
-    library; 'mmf': all of them, the ones in the library under their local release (grid_release)."""
+    """Items for the main grid, shown like local models; `seen` = (viewer, everyone, mine_only) as
+    for seen_items. source '' or 'missing': items not in their owner's library; 'mmf': all of
+    them, the ones in the library under their local release (grid_release)."""
     out = []
-    for d in _matched_items(owner, q, creator):
+    for d in seen_items(*seen, q, creator):
         if d["local"] and source != "mmf":
             continue
         d["grid_release"] = d["local"]["release"] if d["local"] else d["release"]
@@ -462,10 +508,10 @@ def grid_items(owner: int, q: str = "", creator: str | None = None, release: str
     return out
 
 
-def releases(owner: int, q: str = "", creator: str | None = None, source: str = "", tags: list[str] = ()) -> dict[str, dict]:
+def releases(seen: tuple, q: str = "", creator: str | None = None, source: str = "", tags: list[str] = ()) -> dict[str, dict]:
     """casefolded release -> {"release", "creator", "mmf": count} of the grid items (see grid_items)."""
     groups: dict[str, dict] = {}
-    for d in grid_items(owner, q, creator, None, source, tags):
+    for d in grid_items(seen, q, creator, None, source, tags):
         g = groups.setdefault(d["grid_release"].casefold(), {"release": d["grid_release"], "creators": {}, "mmf": 0})
         g["mmf"] += 1
         if d["creator"]:
@@ -540,16 +586,14 @@ def local_tags() -> dict[str, list[str]]:
     return _local_tags_cache[1]
 
 
-def creators(owner: int, q: str = "", tags: list[str] = ()) -> dict[str, dict]:
-    """creator_key -> {"creator": the most used spelling, "items": count} of the owner's synced items."""
-    where, args = _search(q, owner)
+def creators(seen: tuple, q: str = "", tags: list[str] = ()) -> dict[str, dict]:
+    """creator_key -> {"creator": the most used spelling, "items": count} of the synced items the
+    viewer sees (`seen` as for grid_items)."""
     spellings: dict[str, dict[str, int]] = {}
-    renamed = creator_names()
-    own = own_tags(owner) if tags else {}
-    for r in db.conn().execute(f"SELECT i.id, i.creator, i.tags FROM mmf_items i {where}", args):
-        if tags and not has_tags(json.loads(r["tags"] or "[]") + own.get(r["id"], []), tags):
+    for d in seen_items(*seen, q):
+        if tags and not has_tags(d["tags"] + d["mmf_tags"], tags):
             continue
-        shown = display_creator(r["creator"], renamed)
+        shown = d["creator"]
         names = spellings.setdefault(creator_key(shown), {})
         names[shown] = names.get(shown, 0) + 1
     return {k: {"creator": max(v, key=v.get), "items": sum(v.values())} for k, v in spellings.items()}
@@ -565,6 +609,8 @@ def item(owner: int, oid: int) -> dict | None:
     d["sources"] = [dict(x) for x in c.execute(
         "SELECT source, collection FROM mmf_links WHERE item_id=? AND owner=? ORDER BY source, collection", (oid, owner))]
     d["local"] = _match(r["name"], d["creator"], _local_index(owner))
+    default, chosen = _public(owner)
+    d["owner"], d["public"] = owner, chosen.get(oid, default)
     return d
 
 

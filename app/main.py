@@ -71,6 +71,20 @@ def _vis(v: auth.Viewer, scope: str = "") -> tuple[str, list]:
 
 
 
+def _mmf_seen(v: auth.Viewer, scope: str = "") -> tuple:
+    """Whose MyMiniFactory items v sees, as mmf.seen_items takes it: like models, their own and
+    everyone's public ones (all of them in admin mode), only their own for 'mine'."""
+    _vis(v, scope)  # checks the scope
+    return v.id, v.sees_all, scope == "mine"
+
+
+def _mmf_dicts(items: list[dict], v: auth.Viewer) -> list[dict]:
+    names = auth.usernames()
+    for d in items:
+        d.update(_owner_fields(v, d["owner"], d["public"], names))
+    return items
+
+
 def _visible(table: str, row_id: int, v: auth.Viewer):
     where, args = _vis(v)
     r = db.conn().execute(f"SELECT * FROM {table} WHERE id=? AND {where}", (row_id, *args)).fetchone()
@@ -203,7 +217,7 @@ def releases(v: Me, q: str = "", tags: str = "", creator: Optional[str] = None, 
                          args).fetchall()
         out = [{**dict(r), "mmf": 0} for r in rows]
     if source != "local":  # everyone's own MyMiniFactory library, in All and My models alike
-        online = mmf.releases(v.id, q, creator, source, [t for t in tags.split(",") if t.strip()])
+        online = mmf.releases(_mmf_seen(v, scope), q, creator, source, [t for t in tags.split(",") if t.strip()])
         for r in out:
             hit = online.pop(r["release"].casefold(), None)
             r["mmf"] = hit["mmf"] if hit else 0
@@ -285,8 +299,8 @@ def models(v: Me, release: Optional[str] = None, q: str = "", supported: Optiona
     c = db.conn()
     source = _source(source)
     tag_list = [t for t in tags.split(",") if t.strip()]
-    online = [] if source == "local" or supported else mmf.newest_first(
-        mmf.grid_items(v.id, q, creator, release, source, tag_list))
+    online = [] if source == "local" or supported else _mmf_dicts(mmf.newest_first(
+        mmf.grid_items(_mmf_seen(v, scope), q, creator, release, source, tag_list)), v)
     where, args = _filters(v, scope, release, q, tag_list, creator)
     having = ""
     if supported == "yes":
@@ -524,7 +538,7 @@ def all_tags(v: Me, release: Optional[str] = None, scope: str = ""):
             if model_id in shown:
                 for t in tags:
                     add(t, model_id)
-    for d in mmf.grid_items(v.id, release=release):
+    for d in mmf.grid_items(_mmf_seen(v, scope), release=release):
         for t in d["tags"] + d["mmf_tags"]:
             add(t, ("mmf", d["id"]))
     return [{"tag": g["tag"], "models": len(g["ids"])} for g in sorted(groups.values(), key=lambda g: g["tag"].casefold())]
@@ -546,7 +560,7 @@ def release_tags(t: TagsIn, v: Me, scope: str = ""):
     where, args = _vis(v, scope if v.is_admin else "mine")
     ids = [r[0] for r in db.conn().execute(
         f"SELECT DISTINCT model_id FROM files WHERE release=? AND hidden=0 AND {where}", (t.release, *args))]
-    online = [d["id"] for d in mmf.grid_items(v.id, release=t.release)]
+    online = [d["id"] for d in mmf.grid_items((v.id, False, True), release=t.release)]
     _apply_tags(ids, t, online, v.id)
     return {"models": len(ids) + len(online)}
 
@@ -563,7 +577,7 @@ def creators(v: Me, q: str = "", tags: str = "", scope: str = ""):
                                  COUNT(DISTINCT model_id) models FROM files WHERE {where}
                                  GROUP BY creator COLLATE NOCASE ORDER BY creator COLLATE NOCASE""", args).fetchall()
     out = [{**dict(r), "mmf": 0} for r in rows]
-    online = mmf.creators(v.id, q, [t for t in tags.split(",") if t.strip()])
+    online = mmf.creators(_mmf_seen(v, scope), q, [t for t in tags.split(",") if t.strip()])
     for c in out:
         hit = online.pop(mmf.creator_key(c["creator"]), None)
         c["mmf"] = hit["items"] if hit else 0
@@ -762,7 +776,8 @@ def delete_map(map_id: int, v: Admin):
 
 class BulkIn(BaseModel):
     model_ids: list[str] = []
-    mmf_ids: list[int] = []         # MyMiniFactory items: only the tags apply
+    mmf_ids: list[int] = []         # the viewer's MyMiniFactory items: only the tags and public apply
+    mmf_refs: list[str] = []        # MyMiniFactory items as "owner:id", other people's too (for admins)
     add_tags: list[str] = []
     remove_tags: list[str] = []
     release: Optional[str] = None   # move them to this release
@@ -776,7 +791,17 @@ class BulkIn(BaseModel):
 @app.post("/api/models/bulk")
 def bulk_edit(b: BulkIn, v: Me):
     """Edit several models at once (tags first, so they move with the models)."""
-    if not b.model_ids and not b.mmf_ids:
+    online: dict[int, list[int]] = {v.id: list(b.mmf_ids)} if b.mmf_ids else {}  # owner -> item ids
+    for ref in b.mmf_refs:
+        try:
+            owner, oid = map(int, ref.split(":"))
+        except ValueError:
+            raise HTTPException(400, "Bad MyMiniFactory item")
+        if not v.can_edit(owner):
+            raise HTTPException(403, "That is someone else's MyMiniFactory item")
+        online.setdefault(owner, []).append(oid)
+    n_online = sum(map(len, online.values()))
+    if not b.model_ids and not n_online:
         raise HTTPException(400, "Pick some models")
     _check_edit(v, b.model_ids)
     if b.claim and b.model_ids:
@@ -789,16 +814,20 @@ def bulk_edit(b: BulkIn, v: Me):
     release = " ".join(b.release.split()) if b.release is not None else None
     if b.supported not in (None, 1, 0, -1):
         raise HTTPException(400, "Bad support value")
-    _apply_tags(b.model_ids, TagsIn(add=b.add_tags, remove=b.remove_tags), b.mmf_ids, v.id)
+    _apply_tags(b.model_ids, TagsIn(add=b.add_tags, remove=b.remove_tags))
+    for owner, ids in online.items():
+        _apply_tags([], TagsIn(add=b.add_tags, remove=b.remove_tags), ids, owner)
+        if b.public is not None:
+            mmf.set_visibility(owner, ids, b.public)
     if not b.model_ids:
-        return {"models": 0, "mmf": len(b.mmf_ids), "releases": []}
+        return {"models": 0, "mmf": n_online, "releases": []}
     if b.public is not None:
         library.set_visibility(b.model_ids, b.public)
     releases = library.bulk_edit(b.model_ids, release or None, b.supported, 1 if b.hidden else None)
     if b.creator is not None and releases:
         _set_creator(releases, b.creator, v)
         library.reclassify()
-    return {"models": len(b.model_ids), "mmf": len(b.mmf_ids), "releases": releases}
+    return {"models": len(b.model_ids), "mmf": n_online, "releases": releases}
 
 
 # ---------------------------------------------------------------- combined models
@@ -862,6 +891,10 @@ def split_combine(combine_id: int, v: Me):
 
 # ---------------------------------------------------------------- MyMiniFactory
 
+class VisibilityIn(BaseModel):
+    public: bool
+
+
 @app.get("/api/mmf")
 def mmf_items(v: Me, q: str = "", missing: bool = False, offset: int = 0, limit: int = Query(200, le=1000),
               creator: Optional[str] = None, release: Optional[str] = None):
@@ -899,12 +932,21 @@ def mmf_set_gallery(payload: dict, v: Me):
     return {"saved": mmf.set_galleries(v.id, payload.get("items") or [])}
 
 
-@app.get("/api/mmf/{oid}")
-def mmf_item(oid: int, v: Me):
-    d = mmf.item(v.id, oid)
-    if not d:
+def _mmf_item(oid: int, owner: Optional[int], v: auth.Viewer, edit: bool = False) -> dict:
+    """A MyMiniFactory item of owner's library (the viewer's by default) as v may see it."""
+    owner = v.id if owner is None else owner
+    d = mmf.item(owner, oid)
+    if not d or not (owner == v.id or v.sees_all or d["public"]):
         raise HTTPException(404)
-    return d
+    if edit and not v.can_edit(owner):
+        raise HTTPException(403, "Only its owner or an admin can change it")
+    return _mmf_dicts([d], v)[0]
+
+
+@app.get("/api/mmf/{oid}")
+def mmf_item(oid: int, v: Me, owner: Optional[int] = None):
+    """An item of the viewer's MyMiniFactory library, or of `owner`'s when it is public."""
+    return _mmf_item(oid, owner, v)
 
 
 class MmfQueueIn(BaseModel):
@@ -912,12 +954,18 @@ class MmfQueueIn(BaseModel):
 
 
 @app.post("/api/mmf/{oid}/tags")
-def mmf_item_tags(oid: int, t: TagsIn, v: Me):
+def mmf_item_tags(oid: int, t: TagsIn, v: Me, owner: Optional[int] = None):
     """The item's own tags, added in the app (its MyMiniFactory tags stay as they are)."""
-    if not mmf.item(v.id, oid):
-        raise HTTPException(404)
-    _apply_tags([], t, [oid], v.id)
-    return {"tags": mmf.own_tags(v.id, [oid]).get(oid, [])}
+    d = _mmf_item(oid, owner, v, edit=True)
+    _apply_tags([], t, [oid], d["owner"])
+    return {"tags": mmf.own_tags(d["owner"], [oid]).get(oid, [])}
+
+
+@app.put("/api/mmf/{oid}/visibility")
+def mmf_item_visibility(oid: int, body: VisibilityIn, v: Me, owner: Optional[int] = None):
+    d = _mmf_item(oid, owner, v, edit=True)
+    mmf.set_visibility(d["owner"], [oid], body.public)
+    return {"public": body.public}
 
 
 @app.post("/api/mmf/{oid}/queue")
@@ -962,10 +1010,6 @@ def hidden_files(v: Me):
 
 
 # ---------------------------------------------------------------- visibility
-
-class VisibilityIn(BaseModel):
-    public: bool
-
 
 @app.put("/api/models/{model_id}/visibility")
 def model_visibility(model_id: str, body: VisibilityIn, v: Me):
@@ -1053,6 +1097,7 @@ def update_me(body: MeIn, request: Request, v: Me):
     if body.default_public is not None:
         auth.update_user(v.id, default_public=body.default_public)
         library.clear_visibility(v.id)
+        mmf.clear_visibility(v.id)
         library.reclassify()
     return auth.viewer(request.cookies.get(auth.COOKIE)).as_dict()
 

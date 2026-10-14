@@ -139,8 +139,11 @@ groups them by **release** and **model**, separates **supported** and
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
 * **Your MyMiniFactory library.** Every account syncs its own MyMiniFactory
-  library, compared with the models that person uploaded, and only they see it
-  and its tags. MyMiniFactory has no API for a user's
+  library, compared with the models that person uploaded. Its items are shared
+  like models: private at first, made public the same ways (*Make public* in the
+  item's window, *Select models* → *Edit…*, or *Your models are*), and seen by
+  everyone in admin mode. Other people's items open read-only, say whose they
+  are, and have no download button, since only their owner can download them. MyMiniFactory has no API for a user's
   purchases, pledges or tribes, so *Sync* (next to MyMiniFactory in the sidebar)
   gives you a bookmark to drag to your bookmarks bar. Click it on
   myminifactory.com while logged in: it reads your library the way the site's

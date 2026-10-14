@@ -161,6 +161,15 @@ CREATE TABLE IF NOT EXISTS mmf_autotagged (
     PRIMARY KEY (owner, item_id)
 );
 
+-- Who can see a user's MyMiniFactory item, when they chose it for that item; otherwise
+-- users.default_public decides, as for their models.
+CREATE TABLE IF NOT EXISTS mmf_visibility (
+    owner INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    public INTEGER NOT NULL,
+    PRIMARY KEY (owner, item_id)
+);
+
 CREATE TABLE IF NOT EXISTS mmf_links (
     owner INTEGER NOT NULL DEFAULT 1,  -- users.id whose MyMiniFactory library has the item
     item_id INTEGER NOT NULL,
