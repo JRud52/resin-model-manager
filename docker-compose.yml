@@ -6,6 +6,9 @@ services:
   resin-models:
     # Built from main by GitHub Actions (.github/workflows/docker.yml).
     image: ghcr.io/jrud52/resin-model-manager:latest
+    # Check for a newer :latest image every time the stack is started or
+    # redeployed, instead of reusing the one already on the NAS.
+    pull_policy: always
     container_name: resin-models
     restart: unless-stopped
     # Files the app writes belong to this NAS user (`id -u`, `id -g`).
