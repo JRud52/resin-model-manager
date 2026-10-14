@@ -186,27 +186,59 @@ def sync(client, *items):
                                                      for i, n in items], "complete": ["purchase"]})
 
 
+bob_id = bob.get("/api/me")["id"]
 admin_mmf = admin.get("/api/mmf/status")
 s = sync(bob, (900001, "Bob Pack"), (900002, "Dragon Hoard"))
 assert s["total"] == 2 and s["missing"] == 1, "Bob Pack is in bob's library, Dragon Hoard isn't"
 assert bob.get("/api/mmf/900001")["local"]["release"] == "Bob Pack"
 assert admin.get("/api/mmf/status") == admin_mmf, "the admin's MyMiniFactory list is their own"
 assert carol.get("/api/mmf/status")["total"] == 0
-assert carol.status_of("GET", "/api/mmf/900002") == 404, "nor can others open bob's items"
+def online(client, **params):
+    return {(m["owner_name"], m["id"]): m for m in client.get(f"/api/models?{urllib.parse.urlencode({'limit': 1000, **params})}")["items"]
+            if m.get("mmf")}
+
+
+# Like models, they are private to start with.
+assert carol.status_of("GET", "/api/mmf/900002") == 404 and carol.status_of("GET", f"/api/mmf/900002?owner={bob_id}") == 404
+assert not any(o == "bob" for o, _ in online(carol)), "carol doesn't see bob's private items"
 bob.post("/api/mmf/900002/tags", {"add": ["bob's dragon"]})
-online = [m for m in bob.get("/api/models?source=missing")["items"] if m.get("mmf")]
-assert [m["id"] for m in online] == [900002] and "bob's dragon" in online[0]["tags"], online
+mine_online = online(bob, source="missing")
+assert list(mine_online) == [("bob", 900002)] and "bob's dragon" in mine_online[("bob", 900002)]["tags"], mine_online
+assert mine_online[("bob", 900002)]["mine"] and mine_online[("bob", 900002)]["can_edit"]
 admin.put("/api/me/admin-mode", {"on": True})
-assert not any(m["id"] in (900001, 900002) for m in admin.get("/api/models?source=mmf&limit=1000")["items"] if m.get("mmf"))
+assert ("bob", 900002) in online(admin), "admin mode shows everyone's items"
+assert ("bob", 900002) not in online(admin, scope="mine")
 admin.put("/api/me/admin-mode", {"on": False})
-# The same item in two people's libraries: one copy, but their own tags and lists.
+assert ("bob", 900002) not in online(admin)
+# Public: everyone sees them, read-only, with whose they are.
+bob.put("/api/mmf/900002/visibility", {"public": True})
+dragon = online(carol)[("bob", 900002)]
+assert dragon["public"] and not dragon["mine"] and not dragon["can_edit"], dragon
+assert ("bob", 900002) not in online(carol, scope="mine")
+assert carol.get(f"/api/mmf/900002?owner={bob_id}")["owner_name"] == "bob"
+assert carol.status_of("POST", f"/api/mmf/900002/tags?owner={bob_id}", {"add": ["x"]}) == 403
+assert carol.status_of("PUT", f"/api/mmf/900002/visibility?owner={bob_id}", {"public": False}) == 403
+assert carol.status_of("POST", "/api/models/bulk", {"mmf_refs": [f"{bob_id}:900002"], "add_tags": ["x"]}) == 403
+assert "Orc Smiths" in {c["creator"] for c in carol.get("/api/creators") if c["mmf"]}
+admin.post(f"/api/mmf/900002/tags?owner={bob_id}", {"add": ["checked"]})
+assert "checked" in bob.get("/api/mmf/900002")["tags"], "admins can change them"
+# The same item in two people's libraries: listed once for each viewer, the viewer's own first,
+# each with its owner's tags.
 assert sync(carol, (900002, "Dragon Hoard"))["missing"] == 1
 assert "bob's dragon" not in carol.get("/api/mmf/900002")["tags"], "bob's tags stay bob's"
-carol.post("/api/models/bulk", {"mmf_ids": [900001, 900002], "add_tags": ["carol's"]})
+assert [k for k in online(carol) if k[1] == 900002] == [("carol", 900002)]
+carol.post("/api/models/bulk", {"mmf_ids": [900002], "add_tags": ["carol's"]})
 assert "carol's" not in bob.get("/api/mmf/900002")["tags"] and "carol's" in carol.get("/api/mmf/900002")["tags"]
+bob.post("/api/models/bulk", {"mmf_refs": [f"{bob_id}:900001", f"{bob_id}:900002"], "public": False})
+assert not any(o == "bob" for o, _ in online(carol))
 sync(carol)
 assert carol.get("/api/mmf/status")["total"] == 0 and bob.get("/api/mmf/status")["total"] == 2, "carol's sync leaves bob's list alone"
 assert carol.status_of("GET", "/api/mmf/900002") == 404
+# "Your models are public" covers the items too.
+bob.put("/api/me", {"default_public": True})
+assert {("bob", 900001), ("bob", 900002)} <= set(online(carol, source="mmf"))
+bob.put("/api/me", {"default_public": False})
+assert not any(o == "bob" for o, _ in online(carol, source="mmf"))
 print("MyMiniFactory per person ok")
 
 # Admin only: settings, users, folder mappings, creator renames.

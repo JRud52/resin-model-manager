@@ -97,8 +97,9 @@ function thumb(m) {
   return `<img loading="lazy" src="${src}" alt="${esc(m.model)}" class="${m.cover_image ? "photo" : ""}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">`;
 }
 
-// Grid entries are local models (id) and MyMiniFactory items (mmf:id).
-const pickKey = (m) => (m.mmf ? `mmf:${m.id}` : m.id);
+// Grid entries are local models (id) and MyMiniFactory items (mmf:owner:id; several people can have one item).
+const mmfRef = (m) => `${m.owner}:${m.id}`;
+const pickKey = (m) => (m.mmf ? `mmf:${mmfRef(m)}` : m.id);
 
 function card(m) {
   if (m.mmf) return mmfCard(m);
@@ -245,9 +246,9 @@ $("#more").onclick = () => { state.offset += PAGE; loadModels(true); };
 $("#grid").addEventListener("click", (e) => {
   if (e.target.closest("a")) return;
   const c = e.target.closest(".card"); if (!c) return;
-  const m = c.dataset.mmf ? state.items.find((x) => x.mmf && String(x.id) === c.dataset.mmf) : state.items.find((x) => x.id === c.dataset.id);
+  const m = c.dataset.mmf ? state.items.find((x) => x.mmf && mmfRef(x) === c.dataset.mmf) : state.items.find((x) => x.id === c.dataset.id);
   if (!state.picked) { if (m?.mmf) openMmfItem(m); else openModel(c.dataset.id); return; }
-  if (!m || !(m.mmf || m.can_edit)) return;  // other people's models can't be changed
+  if (!m?.can_edit) return;  // other people's models can't be changed
   const key = pickKey(m);
   if (state.picked.has(key)) state.picked.delete(key); else state.picked.set(key, m);
   c.classList.toggle("picked", state.picked.has(key));
@@ -285,7 +286,7 @@ $("#combineBtn").onclick = () => {
 };
 $("#selectCancel").onclick = endPicking;
 $("#selectAll").onclick = () => {
-  state.items.filter((m) => m.mmf || m.can_edit).forEach((m) => state.picked.set(pickKey(m), m));
+  state.items.filter((m) => m.can_edit).forEach((m) => state.picked.set(pickKey(m), m));
   document.querySelectorAll("#grid .card:not(.locked)").forEach((c) => c.classList.add("picked"));
   showPicked();
 };
@@ -304,7 +305,7 @@ $("#bulkGo").onclick = () => {
   const n = state.picked.size, rels = pickedReleases();
   const online = [...state.picked.values()].filter((m) => m.mmf).length;
   $("#bulkTitle").textContent = `Edit ${n} model${n === 1 ? "" : "s"}` + (rels.size > 1 ? ` in ${rels.size} releases` : "");
-  $("#bulkMmfNote").textContent = online ? `${online} of them ${online === 1 ? "is a MyMiniFactory item" : "are MyMiniFactory items"}: only the tags change for ${online === 1 ? "it" : "those"}.` : "";
+  $("#bulkMmfNote").textContent = online ? `${online} of them ${online === 1 ? "is a MyMiniFactory item" : "are MyMiniFactory items"}: only the tags and who can see ${online === 1 ? "it" : "them"} change.` : "";
   $("#bulkErr").textContent = "";
   $("#bulkDlg").showModal();
 };
@@ -314,7 +315,7 @@ $("#bulkDlg form").addEventListener("submit", async (e) => {
   const f = e.target;
   const list = (v) => v.split(",").map((t) => t.trim()).filter(Boolean);
   const picked = [...state.picked.values()];
-  const body = { model_ids: picked.filter((m) => !m.mmf).map((m) => m.id), mmf_ids: picked.filter((m) => m.mmf).map((m) => m.id),
+  const body = { model_ids: picked.filter((m) => !m.mmf).map((m) => m.id), mmf_refs: picked.filter((m) => m.mmf).map(mmfRef),
     add_tags: list(f.add.value), remove_tags: list(f.remove.value) };
   if (f.release.value.trim()) body.release = f.release.value.trim();
   if (f.clearCreator.checked) body.creator = "";
@@ -395,8 +396,11 @@ function mmfTagBadges(tags, cls = "") {
   return shown;
 }
 
+// Other people's items show who has them, and nothing about downloading: only their owner can.
 function mmfCard(m) {
-  const b = [m.local ? `<span class="badge sup">in your library</span>` : m.queued ? `<span class="badge tag">waiting to download</span>` : `<span class="badge unsup">not downloaded</span>`];
+  const b = ownerBadges(m);
+  if (m.mine) b.push(m.local ? `<span class="badge sup">in your library</span>` : m.queued ? `<span class="badge tag">waiting to download</span>` : `<span class="badge unsup">not downloaded</span>`);
+  else if (m.local) b.push(`<span class="badge sup" title="${esc(m.owner_name)} has it in the library">in the library</span>`);
   [...new Set(m.sources.map((s) => s.source))].forEach((s) => b.push(`<span class="badge">${MMF_SOURCES[s] || esc(s)}</span>`));
   (m.tags || []).forEach((t) => b.push(`<span class="badge tag">${esc(t)}</span>`));
   b.push(...mmfTagBadges(m.mmf_tags || [], "from-mmf"));
@@ -404,7 +408,8 @@ function mmfCard(m) {
   const img = m.image ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(m.image)}" alt="${esc(m.name)}" class="photo"
       onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'No preview'}))">` : `<div class="ph">No preview</div>`;
   const sub = [state.release === null && m.grid_release, m.creator].filter(Boolean).join(" · ") || "MyMiniFactory";
-  return `<div class="card mmf ${state.picked?.has(pickKey(m)) ? "picked" : ""}" data-mmf="${m.id}" title="${esc(m.local ? `In your library: ${m.local.release}` : `On MyMiniFactory${where ? `: ${where}` : ""}`)}">
+  const tip = m.local ? `In ${m.mine ? "your" : `${m.owner_name}'s`} library: ${m.local.release}` : `On MyMiniFactory${where ? `: ${where}` : ""}`;
+  return `<div class="card mmf ${state.picked?.has(pickKey(m)) ? "picked" : ""} ${m.can_edit ? "" : "locked"}" data-mmf="${mmfRef(m)}" title="${esc(tip)}">
     <div class="thumb">${img}</div>
     <div class="meta">
       <div class="title" title="${esc(m.name)}">${esc(m.name)}</div>
@@ -413,18 +418,19 @@ function mmfCard(m) {
     </div></div>`;
 }
 
-function openMmfItem(m) { if (m) openMmfModel(m.id); }
+function openMmfItem(m) { if (m) openMmfModel(m.id, m.owner); }
+const mmfUrl = (m, path = "") => `/api/mmf/${m.id}${path}?owner=${m.owner}`;
 
 // MyMiniFactory items open in the model window too: their pictures, where they
 // come from, and Download to library (done by the bookmarklet on its next run).
-async function openMmfModel(id) {
-  const m = await api(`/api/mmf/${id}`);
+async function openMmfModel(id, owner) {
+  const m = await api(owner == null ? `/api/mmf/${id}` : mmfUrl({ id, owner }));
   state.mmfItem = m;
   state.model = null;
   stop3d();
   const dlg = $("#modelDlg");
   dlg.classList.add("mmf-mode");
-  dlg.classList.remove("read-only");
+  dlg.classList.toggle("read-only", !m.can_edit);
   const where = [...new Set(m.sources.map((s) => s.collection).filter(Boolean))];
   $("#mName").textContent = m.name;
   const when = /^\d/.test(m.published || "") ? " · published " + new Date(m.published).toLocaleDateString() : "";
@@ -433,6 +439,7 @@ async function openMmfModel(id) {
   $("#mFilter").innerHTML = "";
   $("#mTagInput").value = "";
   renderModelTags();
+  renderOwner();
   renderMmfModel();
   if (m.images.length) showMmfPicture(0); else { $("#mPreview").style.visibility = "hidden"; $("#mPreviewName").textContent = "No images"; }
   if (!dlg.open) dlg.showModal();
@@ -443,7 +450,9 @@ function renderMmfModel() {
   const kinds = [...new Set(m.sources.map((s) => MMF_SOURCES[s.source] || s.source))];
   // MyMiniFactory only lets the browser itself download files (the bookmark can't read them),
   // so the file is downloaded there and imported with the release and creator filled in.
-  const dl = m.local
+  const dl = !m.mine
+    ? `<p class="small">From ${esc(m.owner_name)}'s MyMiniFactory library${m.local ? `, and in their library as <b>${esc(m.local.release)}</b>` : ""}.</p>`
+    : m.local
     ? `<p class="small">This is in your library${m.local.release ? ` as <b>${esc(m.local.release)}</b>` : ""}.</p>
        <div class="row"><button id="mmfOpenLocal" class="primary">Open in your library</button></div>`
     : `<p class="small">Download it on MyMiniFactory, then import the file here.</p>
@@ -553,7 +562,7 @@ function renderModelTags() {
 }
 async function changeModelTags(add, remove) {
   const m = tagged();
-  const r = await api(m === state.mmfItem ? `/api/mmf/${m.id}/tags` : `/api/models/${m.id}/tags`, { method: "POST", body: JSON.stringify({ add, remove }) });
+  const r = await api(m === state.mmfItem ? mmfUrl(m, "/tags") : `/api/models/${m.id}/tags`, { method: "POST", body: JSON.stringify({ add, remove }) });
   m.tags = r.tags;
   renderModelTags();
   state.dirty = true;
@@ -845,11 +854,11 @@ async function openModel(id) {
 
 // Who uploaded the model and who can see it; its owner (or an admin) switches public / private.
 function renderOwner() {
-  const m = state.model;
-  const who = m.mine ? "Yours" : `Uploaded by ${m.owner_name || "someone"}`;
+  const m = tagged();
+  const who = m.mine ? "Yours" : m === state.mmfItem ? `In ${m.owner_name}'s MyMiniFactory library` : `Uploaded by ${m.owner_name || "someone"}`;
   $("#mOwner").textContent = hasOthers() || !m.mine
     ? `${who} · ${m.public ? "public: everyone can see it" : m.mine ? "private: only you can see it" : `private: only ${m.owner_name} can see it`}` : "";
-  $("#mClaimBtn").classList.toggle("hidden", !(state.me.is_admin && m.owner === 0));
+  $("#mClaimBtn").classList.toggle("hidden", !(state.me.is_admin && m.owner === 0 && m !== state.mmfItem));
   $("#mVisBtn").textContent = m.public ? "Make private" : "Make public";
   $("#mVisBtn").title = m.public ? "Only its owner will see this model" : "Everyone who logs in will see this model";
 }
@@ -862,8 +871,8 @@ $("#mClaimBtn").onclick = async () => {
   refresh();
 };
 $("#mVisBtn").onclick = async () => {
-  const m = state.model;
-  await api(`/api/models/${m.id}/visibility`, { method: "PUT", body: JSON.stringify({ public: !m.public }) });
+  const m = tagged();
+  await api(m === state.mmfItem ? mmfUrl(m, "/visibility") : `/api/models/${m.id}/visibility`, { method: "PUT", body: JSON.stringify({ public: !m.public }) });
   m.public = !m.public;
   renderOwner();
   state.dirty = true;

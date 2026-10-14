@@ -245,7 +245,7 @@ with sync_playwright() as p:
     app.fill(".side-filter input[data-for='releases']", "castle siege")  # long lists show the first few
     app.click("#releases li[data-r='Kickstarter: Castle Siege']")
     app.wait_for_function("document.getElementById('crumbs').textContent.includes('Castle Siege')")
-    assert app.locator("#grid .card").count() == 1 and app.locator("#grid .card.mmf[data-mmf='4']").count() == 1
+    assert app.locator("#grid .card").count() == 1 and app.locator("#grid .card.mmf[data-mmf='1:4']").count() == 1
     app.click(".side-title[data-sec='releases']")  # sections fold, and stay folded after a reload
     assert app.locator("#releases").is_hidden()
     app.reload()
@@ -269,21 +269,21 @@ with sync_playwright() as p:
     app.fill(".side-filter input[data-for='releases']", "")
     app.click("#creators li[data-c='Castle_Works!']")  # only on MyMiniFactory: its item is in the grid
     app.wait_for_function("(t) => document.getElementById('crumbs').textContent.includes(t)", arg='Castle_Works!')
-    app.wait_for_selector("#grid .card.mmf[data-mmf='4']")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='1:4']")
     assert app.locator("#grid .card").count() == 1
     app.click("#creators li[data-c='Mini Forge']")  # local models and the item not in the library
     app.wait_for_function("(t) => document.getElementById('crumbs').textContent.includes(t)", arg='Mini Forge /')
-    app.wait_for_selector("#grid .card.mmf[data-mmf='6']")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='1:6']")
     assert app.locator("#grid .card.mmf").count() == 1 and app.locator("#grid .card:not(.mmf)").count() >= 1
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-creator.png")
     app.click("#mmfList li[data-src='mmf']")  # only MyMiniFactory, the ones in the library too
     app.wait_for_function("(t) => document.getElementById('crumbs').textContent.includes(t)", arg='MyMiniFactory / Mini Forge')
-    app.wait_for_selector("#grid .card.mmf[data-mmf='5']")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='1:5']")
     assert app.locator("#grid .card.mmf").count() == 2 and app.locator("#grid .card:not(.mmf)").count() == 0
     # The model window asks for the 720px version of a small picture, and keeps the small one without it.
     for oid, want in (("5", "/720X720-boss.png"), ("6", "/230X230-shaman.png")):
-        app.click(f"#grid .card.mmf[data-mmf='{oid}']")
+        app.click(f"#grid .card.mmf[data-mmf='1:{oid}']")
         app.wait_for_selector("#modelDlg.mmf-mode[open]")
         app.wait_for_function("(w) => document.getElementById('mPreview').src.endsWith(w) && "
                               "document.getElementById('mPreview').naturalWidth > 0", arg=want)
@@ -296,7 +296,7 @@ with sync_playwright() as p:
     app.reload()
     app.fill("#search", "goblin")
     app.wait_for_function("document.querySelectorAll('#grid .card.mmf').length === 1")
-    app.wait_for_selector("#grid .card.mmf[data-mmf='6']")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='1:6']")
     assert app.locator("#grid .card.mmf").count() == 1 and app.locator("#grid .card:not(.mmf)").count() >= 1
     assert app.locator("#mmfStrip").count() == 0
     if SHOTS:
@@ -313,7 +313,7 @@ with sync_playwright() as p:
         app.screenshot(path=f"{SHOTS}/mmf-grid.png")
 
     # MyMiniFactory items open in the model window with all their pictures.
-    app.click("#grid .card.mmf[data-mmf='2']")
+    app.click("#grid .card.mmf[data-mmf='1:2']")
     app.wait_for_selector("#modelDlg.mmf-mode[open]")
     wyrm_images = get("/api/mmf/2")["images"]
     assert [u.rsplit("/", 1)[1] for u in wyrm_images] == [
@@ -411,9 +411,9 @@ with sync_playwright() as p:
         app.fill(".side-filter input[data-for='tagList']", "orc")
     app.click("#tagList [data-tag='orc']")
     app.wait_for_function("document.querySelectorAll('#grid .card').length === 1")
-    assert app.locator("#grid .card.mmf[data-mmf='11'] .badge.tag").count() == 2
+    assert app.locator("#grid .card.mmf[data-mmf='1:11'] .badge.tag").count() == 2
     # The tag editor works in an item's window too.
-    app.click("#grid .card.mmf[data-mmf='11']")
+    app.click("#grid .card.mmf[data-mmf='1:11']")
     app.wait_for_selector("#modelDlg.mmf-mode[open]")
     assert app.locator("#mTags .badge.tag.from-mmf").count() == 2
     app.fill("#mTagInput", "Horde")
@@ -422,13 +422,13 @@ with sync_playwright() as p:
     if SHOTS:
         app.screenshot(path=f"{SHOTS}/mmf-tags.png")
     app.keyboard.press("Escape")
-    app.wait_for_selector("#grid .card.mmf[data-mmf='11'] .badge.tag:not(.from-mmf)")
+    app.wait_for_selector("#grid .card.mmf[data-mmf='1:11'] .badge.tag:not(.from-mmf)")
     assert get("/api/mmf/11")["tags"] == ["Horde"]
     # And they can be picked with local models for Edit….
     app.click("#activeTags [data-tag='orc']")
     app.wait_for_function("document.querySelectorAll('#grid .card:not(.mmf)').length > 0")
     app.click("#combineBtn")
-    app.click("#grid .card.mmf[data-mmf='11']")
+    app.click("#grid .card.mmf[data-mmf='1:11']")
     app.click("#grid .card:not(.mmf)")
     assert app.locator("#grid .card.picked").count() == 2 and app.locator("#modelDlg[open]").count() == 0
     assert app.locator("#combineGo").is_disabled()
