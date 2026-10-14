@@ -25,7 +25,7 @@ groups them by **release** and **model**, separates **supported** and
   releases with the same name never mix. Removing an account keeps its models,
   with their tags and settings, now shown as uploaded by *user_removed*. An
   admin can claim them into their own library with *Claim* in a model's window,
-  *Claim for my library* when editing several, or *Claim all* in *Users*. A new
+  *Claim the ones from removed accounts* when editing several, or *Claim all* in *Users*. A new
   account with the same name gets a fresh folder and doesn't see them. A forgotten password is
   reset by an admin, or for the admin itself with
   `docker exec -it resin-models python -m app.auth reset-password <username>`.
