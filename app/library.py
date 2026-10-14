@@ -1,6 +1,7 @@
 """Import, scanning, classification and preview rendering."""
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -102,14 +103,105 @@ def upload_target(rel: str) -> Path:
 
 # ---------------------------------------------------------------- folder layouts
 
+def user_root(path: str) -> str | None:
+    """``_users/<name>`` for a path in a user's own folder (where their uploads go), else None."""
+    parts = PurePosixPath(path).parts
+    return f"{parts[0]}/{parts[1]}" if len(parts) > 2 and parts[0] == config.USERS_FOLDER else None
+
+
+def new_user_folder(username: str) -> str:
+    """A folder for a new account's uploads that no one has had before (a removed account's
+    folder keeps its models, so someone new with the same name gets ``name-2``)."""
+    taken = {r[0].casefold() for r in db.conn().execute("SELECT folder FROM folder_owners")}
+    folder, n = f"{config.USERS_FOLDER}/{username}", 2
+    while folder.casefold() in taken or (config.LIBRARY_DIR / folder).exists():
+        folder, n = f"{config.USERS_FOLDER}/{username}-{n}", n + 1
+    return folder
+
+
+def _inner(path: str) -> tuple[str, str]:
+    """(user folder or '', the path inside it): a user's folder is read like the library root."""
+    root = user_root(path)
+    return (root, path[len(root) + 1:]) if root else ("", path)
+
+
+def owner_ids() -> dict[str, int]:
+    """folder -> owner, from folder_owners."""
+    return {r["folder"]: r["owner"] for r in db.conn().execute("SELECT folder, owner FROM folder_owners")}
+
+
+def owner_of(path: str, owners: dict[str, int]) -> int:
+    """Who a file belongs to: the owner of the nearest folder in folder_owners (a user's own
+    folder, a removed user's, or a model an admin claimed), else the main admin."""
+    if not user_root(path):
+        return db.MAIN_ADMIN
+    p = path
+    while p:
+        if p in owners:
+            return owners[p]
+        p = p.rpartition("/")[0]
+    return db.MAIN_ADMIN
+
+
+def move_release_keys(old: int, new: int):
+    """Release creators and release main pictures set by `old` now count for `new`."""
+    c = db.conn()
+    for table, col, extra in (("release_creators", "release", ""), ("main_pictures", "key", " AND kind='release'")):
+        for r in c.execute(f"SELECT rowid AS rid, {col} AS k FROM {table} WHERE 1{extra}").fetchall():
+            release, sep, owner = r["k"].rpartition("\x00")
+            mine = (owner == str(old)) if sep else old == db.MAIN_ADMIN
+            if mine:
+                c.execute(f"UPDATE OR IGNORE {table} SET {col}=? WHERE rowid=?",
+                          (release_key(release if sep else r["k"], new), r["rid"]))
+    c.commit()
+
+
+def claim(new_owner: int, model_ids: list[str] = (), folder: str = "") -> int:
+    """An admin takes over models of removed accounts: one model's folder each, or all of a
+    removed account's folder. Tags, combines and release settings come along; returns how many
+    models changed hands."""
+    c = db.conn()
+    rows = (list(_ids_in_chunks("SELECT id, model_id, model_root, release, model FROM files WHERE owner = 0 "
+                                "AND model_id IN (%s)", list(model_ids))) if model_ids else
+            [r for r in c.execute("SELECT id, model_id, model_root, release, model FROM files WHERE owner = 0")
+             if _under(r["model_root"], folder)] if folder else [])
+    if not rows:
+        return 0
+    before = {r["id"]: r["model_id"] for r in rows}
+    if folder:
+        c.executemany("UPDATE folder_owners SET owner = ? WHERE folder = ?",
+                      [(new_owner, f) for f, o in owner_ids().items() if o == db.REMOVED_USER and _under(f, folder)])
+    for root in {r["model_root"] for r in rows} if not folder else ():
+        c.execute("INSERT OR REPLACE INTO folder_owners(folder, owner) VALUES (?, ?)", (root, new_owner))
+    for release, model in {(r["release"], r["model"]) for r in rows}:
+        cb = combine_for(release, model, db.REMOVED_USER)
+        if cb:
+            c.execute("UPDATE model_combines SET owner = ? WHERE id = ?", (new_owner, cb["id"]))
+    for release in {r["release"] for r in rows}:  # the removed account's release settings, for these releases
+        for table, col in (("release_creators", "release"), ("main_pictures", "key")):
+            c.execute(f"UPDATE OR IGNORE {table} SET {col} = ? WHERE {col} = ?",
+                      (release_key(release, new_owner), release_key(release, db.REMOVED_USER)))
+    c.commit()
+    _regroup(before)
+    return len(set(before.values()))
+
+
+def release_key(release: str, owner: int) -> str:
+    """Key of what is set on a release (its creator, its main picture): the main admin's
+    releases by name, as before users existed; other users' with their id, so two people's
+    releases with the same name keep their own."""
+    return release if owner == db.MAIN_ADMIN else f"{release}\x00{owner}"
+
+
 def _top_key(rel: str) -> str | None:
     """The top-level library folder a path belongs to, with archives read as folders
-    (``Release.zip`` -> ``Release``); None for a loose file at the library root."""
+    (``Release.zip`` -> ``Release``); None for a loose file at the library root.
+    In a user's folder, the top-level folder inside it (``_users/bob/Release``)."""
+    root, rel = _inner(rel)
     parts = PurePosixPath(rel).parts
-    if len(parts) > 1:
-        return parts[0]
     p = PurePosixPath(rel)
-    return p.stem if p.suffix.lower() in config.ARCHIVE_EXTS else None
+    top = parts[0] if len(parts) > 1 else p.stem if p.suffix.lower() in config.ARCHIVE_EXTS else None
+    return f"{root}/{top}" if root and top else top
 
 
 def folder_moves() -> list[tuple[str, str]]:
@@ -174,7 +266,7 @@ def rename_folder(old: str, new_name: str) -> str:
         c = db.conn()
         tables = [("files", ("rel_path", "logical_path")), ("images", ("rel_path", "logical_path")),
                   ("archives", ("rel_path",)), ("overrides", ("prefix",)), ("path_maps", ("prefix",)),
-                  ("main_pictures", ("path",)), ("folder_layouts", ("folder",))]
+                  ("main_pictures", ("path",)), ("folder_layouts", ("folder",)), ("visibility", ("prefix",))]
         cached = [(dict(r), cache_path(r)) for t in ("files", "images")
                   for r in c.execute(f"SELECT * FROM {t}") if _under(r["rel_path"], old)]
         os.rename(src, dst)
@@ -213,8 +305,10 @@ def folder_layouts() -> dict[str, int]:
 
 
 def depth_for(logical_path: str, layouts: dict[str, int], default: int) -> int:
-    top = PurePosixPath(logical_path).parts[0]
-    return layouts.get(top, default)
+    root, inner = _inner(logical_path)
+    if root:  # only browser uploads are in users' folders: Release / Model unless recorded otherwise
+        return layouts.get(f"{root}/{PurePosixPath(inner).parts[0]}", 0)
+    return layouts.get(PurePosixPath(logical_path).parts[0], default)
 
 
 def record_layout(rel: str, depth: int):
@@ -274,11 +368,12 @@ def migrate_layouts() -> bool:
     return changed
 
 
-async def save_upload(rel: str, size: int, chunks, depth: int = 0) -> dict:
+async def save_upload(rel: str, size: int, chunks, depth: int = 0, folder: str = "") -> dict:
     """Stream an uploaded file into the library. An identical-size file already
     there is kept as is; a different file with the same name gets a numbered name.
-    `depth` is the layout of the uploaded path: 0 Release/..., 1 Creator/Release/..."""
-    target = upload_target(rel)
+    `depth` is the layout of the uploaded path: 0 Release/..., 1 Creator/Release/...
+    `folder` is the uploader's own folder (users.folder), '' for the main library."""
+    target = upload_target(f"{folder}/{rel}" if folder else rel)
     record_layout(target.relative_to(config.LIBRARY_DIR.resolve()).as_posix(), depth)
     if target.exists():
         if target.stat().st_size == size:
@@ -465,8 +560,12 @@ def model_key(model: str) -> str:
     return classify.strip_tokens(model) or classify.norm(model)
 
 
-def model_id(release: str, model: str) -> str:
+def model_id(release: str, model: str, owner: int = db.MAIN_ADMIN) -> str:
+    """Stable id of a model. Other users' models with the same release and name are their own
+    (the main admin's ids are the ones from before there were users, so tags stay put)."""
     key = classify.norm(release) + "\x00" + model_key(model)
+    if owner != db.MAIN_ADMIN:
+        key += f"\x00{owner}"
     return hashlib.sha1(key.encode()).hexdigest()[:12]
 
 
@@ -495,11 +594,11 @@ class _Reader:
             lp = PurePosixPath(r["logical_path"])
             self.by_folder[str(lp.parent)].append(lp.stem)
         self.creator_keys = self._creator_keys(rows, set_creators, overrides)
-        # (release, model key) of every combined part -> (combined name, option group)
-        self.combined: dict[tuple[str, str], tuple[str, str]] = {}
+        # (owner, release, model key) of every combined part -> (combined name, option group)
+        self.combined: dict[tuple[int, str, str], tuple[str, str]] = {}
         for cb in combines():
             for part in cb["parts"]:
-                self.combined[(cb["release"].lower(), model_key(part))] = (cb["name"], part)
+                self.combined[(cb["owner"], cb["release"].lower(), model_key(part))] = (cb["name"], part)
 
     def roles_for(self, lp: str) -> tuple | None:
         return next((roles for pre, roles in self.maps if _under(lp, pre)), None)
@@ -509,8 +608,14 @@ class _Reader:
         roles = self.roles_for(lp)
         if roles:
             return classify.mapped(lp, roles, siblings, self.creator_keys)
-        return classify.guess(lp, depth_for(lp, self.layouts, self.default_depth), siblings,
-                              self.creator_keys, self.ignored)
+        root, inner = _inner(lp)
+        g = classify.guess(inner, depth_for(lp, self.layouts, self.default_depth), siblings,
+                           self.creator_keys, self.ignored)
+        if not root:
+            return g
+        # A user's folder is read like the library root; its two folders are skipped.
+        return dataclasses.replace(g, model_root=f"{root}/{g.model_root}", roles=("ignore", "ignore") + g.roles,
+                                   release_index=g.release_index + 2 if g.release_index >= 0 else -1)
 
     def _creator_keys(self, rows, set_creators, overrides) -> set[str]:
         """Every creator name we know of, so a release that repeats its creator's folder
@@ -524,6 +629,7 @@ class _Reader:
             if roles:
                 keys |= {classify.name_key(f) for f, role in zip(parts[:-1], roles) if role == "creator"}
                 continue
+            parts = PurePosixPath(_inner(r["logical_path"])[1]).parts
             if parts and classify.name_key(parts[0]) in self.ignored:
                 continue
             depth = depth_for(r["logical_path"], self.layouts, self.default_depth)
@@ -539,12 +645,30 @@ def _context(c, extra_map=None):
     return rows, overrides, release_creators, _Reader(rows, overrides, release_creators.values(), extra_map)
 
 
+def visibility_rules() -> dict[str, int]:
+    return {r["prefix"]: r["public"] for r in db.conn().execute("SELECT prefix, public FROM visibility")}
+
+
+def _public(lp: str, rules: dict[str, int], default: int) -> int:
+    """The visibility rule on the path or its nearest folder, else the owner's default."""
+    p = lp
+    while p:
+        if p in rules:
+            return rules[p]
+        p = p.rpartition("/")[0]
+    return default
+
+
 def _classify(rows, overrides, release_creators, reader) -> list[list]:
-    """[creator, release, model, model_id, option, supported, model_root, hidden, id] per row."""
+    """[creator, release, model, model_id, option, supported, model_root, hidden, owner, public, id] per row."""
     names = mmf.creator_names()
+    owners = owner_ids()
+    defaults = {r["id"]: r["default_public"] for r in db.conn().execute("SELECT id, default_public FROM users")}
+    rules = visibility_rules()
     updates = []
     for r in rows:
         lp = r["logical_path"]
+        owner = owner_of(lp, owners)
         g = reader.guess(lp)
         release, model, option, supported, hidden = g.release, g.model, g.option, g.supported, 0
         creator, set_unknown = g.creator, False
@@ -558,8 +682,8 @@ def _classify(rows, overrides, release_creators, reader) -> list[list]:
                     supported = None if o["supported"] == -1 else bool(o["supported"])
                     set_unknown = o["supported"] == -1
                 hidden = o["hidden"] if o["hidden"] is not None else hidden
-        creator = mmf.display_creator(release_creators.get(release.lower(), creator), names)
-        combined = reader.combined.get((release.lower(), model_key(model)))
+        creator = mmf.display_creator(release_creators.get(release_key(release, owner).lower(), creator), names)
+        combined = reader.combined.get((owner, release.lower(), model_key(model)))
         if combined:  # the former model becomes an option group of the combined one
             model, option = combined[0], " / ".join(filter(None, (combined[1], option)))
         sup = None if supported is None else int(supported)
@@ -567,8 +691,8 @@ def _classify(rows, overrides, release_creators, reader) -> list[list]:
         # unless the user explicitly marked it unknown.
         if sup is None and not set_unknown:
             sup = 0
-        updates.append([creator, release, model, model_id(release, model), option, sup,
-                        g.model_root, hidden, r["id"]])
+        updates.append([creator, release, model, model_id(release, model, owner), option, sup,
+                        g.model_root, hidden, owner, _public(g.model_root, rules, defaults.get(owner, 0)), r["id"]])
     return updates
 
 
@@ -578,7 +702,7 @@ def reclassify():
     rows, overrides, release_creators, reader = _context(c)
     updates = _classify(rows, overrides, release_creators, reader)
     c.executemany("UPDATE files SET creator=?, release=?, model=?, model_id=?, option=?, supported=?, "
-                  "model_root=?, hidden=? WHERE id=?", updates)
+                  "model_root=?, hidden=?, owner=?, public=? WHERE id=?", updates)
     match_images(c, overrides, reader)
     c.commit()
 
@@ -661,13 +785,15 @@ def combines(release: str | None = None) -> list[dict]:
     q, args = "SELECT * FROM model_combines", ()
     if release is not None:
         q, args = q + " WHERE release = ?", (release,)
-    return [{"id": r["id"], "release": r["release"], "name": r["name"], "parts": json.loads(r["parts"])}
+    return [{"id": r["id"], "release": r["release"], "name": r["name"], "parts": json.loads(r["parts"]),
+             "owner": r["owner"]}
             for r in db.conn().execute(q + " ORDER BY release COLLATE NOCASE, name COLLATE NOCASE", args)]
 
 
-def combine_for(release: str, model: str) -> dict | None:
+def combine_for(release: str, model: str, owner: int = db.MAIN_ADMIN) -> dict | None:
     """The combine that made this model, if any."""
-    return next((cb for cb in combines(release) if model_key(cb["name"]) == model_key(model)), None)
+    return next((cb for cb in combines(release) if model_key(cb["name"]) == model_key(model)
+                 and cb["owner"] == owner), None)
 
 
 def _release_ids(release: str) -> dict[int, str]:
@@ -681,12 +807,14 @@ def _regroup(before: dict[int, str]):
     _preview_wakeup.set()
 
 
-def combine_models(release: str, model_ids: list[str], name: str) -> dict:
+def combine_models(release: str, model_ids: list[str], name: str, owner: int = db.MAIN_ADMIN) -> dict:
     """Combine models of a release into one called name; each becomes an option group
-    named after it. A selected model that is itself a combine is merged into the new one."""
+    named after it. A selected model that is itself a combine is merged into the new one.
+    Only models of `owner` are combined."""
     c = db.conn()
     names: dict[str, str] = {}
-    for r in c.execute("SELECT model_id, MIN(model) model FROM files WHERE release = ? GROUP BY model_id", (release,)):
+    for r in c.execute("SELECT model_id, MIN(model) model FROM files WHERE release = ? AND owner = ? GROUP BY model_id",
+                       (release, owner)):
         names[r["model_id"]] = r["model"]
     picked = [names[m] for m in dict.fromkeys(model_ids) if m in names]
     if len(picked) < 2:
@@ -694,7 +822,7 @@ def combine_models(release: str, model_ids: list[str], name: str) -> dict:
     parts: list[str] = []
     absorbed = []
     for model in picked:
-        cb = combine_for(release, model)
+        cb = combine_for(release, model, owner)
         if cb:
             parts += cb["parts"]
             absorbed.append(cb["id"])
@@ -703,11 +831,11 @@ def combine_models(release: str, model_ids: list[str], name: str) -> dict:
     parts = list({model_key(p): p for p in reversed(parts)}.values())[::-1]  # drop repeats, keep order
     before = _release_ids(release)
     c.executemany("DELETE FROM model_combines WHERE id = ?", [(i,) for i in absorbed])
-    c.execute("INSERT INTO model_combines(release, name, parts) VALUES (?, ?, ?)",
-              (release, name, json.dumps(parts)))
+    c.execute("INSERT INTO model_combines(release, name, parts, owner) VALUES (?, ?, ?, ?)",
+              (release, name, json.dumps(parts), owner))
     c.commit()
     _regroup(before)
-    return {"id": model_id(release, name), "parts": parts}
+    return {"id": model_id(release, name, owner), "parts": parts}
 
 
 def update_combine(combine_id: int, name: str, release: str) -> bool:
@@ -746,7 +874,7 @@ def bulk_edit(model_ids: list[str], release: str | None = None, supported: int |
     """Move several models to a release, set their support or hide them, as correction rules
     on their folders. Tags and combines move with them. Returns the releases they end up in."""
     c = db.conn()
-    rows = list(_ids_in_chunks("SELECT id, model_id, model_root, release, model FROM files WHERE model_id IN (%s)",
+    rows = list(_ids_in_chunks("SELECT id, model_id, model_root, release, model, owner FROM files WHERE model_id IN (%s)",
                                model_ids))
     if not rows:
         return []
@@ -755,13 +883,36 @@ def bulk_edit(model_ids: list[str], release: str | None = None, supported: int |
         add_overrides(sorted({r["model_root"] for r in rows}),
                       {"release": release, "supported": supported, "hidden": hidden})
         if release is not None:  # a combined model keeps its option groups in the new release
-            for rel, model in {(r["release"], r["model"]) for r in rows}:
-                cb = combine_for(rel, model)
+            for rel, model, owner in {(r["release"], r["model"], r["owner"]) for r in rows}:
+                cb = combine_for(rel, model, owner)
                 if cb:
                     c.execute("UPDATE model_combines SET release=? WHERE id=?", (release, cb["id"]))
             c.commit()
         _regroup(before)
     return [release] if release is not None else sorted({r["release"] for r in rows})
+
+
+def set_visibility(model_ids: list[str], public: bool):
+    """Make models public (every user sees them) or private (only their owner), as rules on their
+    folders that survive re-indexing. Rules deeper inside those folders are replaced."""
+    c = db.conn()
+    roots = {r["model_root"] for r in _ids_in_chunks("SELECT DISTINCT model_root FROM files WHERE model_id IN (%s)",
+                                                      model_ids)}
+    rules = visibility_rules()
+    for root in roots:
+        c.executemany("DELETE FROM visibility WHERE prefix = ?", [(p,) for p in rules if _under(p, root)])
+        c.execute("INSERT OR REPLACE INTO visibility(prefix, public) VALUES (?, ?)", (root, int(public)))
+    c.commit()
+    reclassify()
+
+
+def clear_visibility(user_id: int):
+    """Drop a user's per-model public/private choices, so all their models follow their default."""
+    c = db.conn()
+    rules = visibility_rules()
+    for p in {r["model_root"] for r in c.execute("SELECT DISTINCT model_root FROM files WHERE owner = ?", (user_id,))}:
+        c.executemany("DELETE FROM visibility WHERE prefix = ?", [(q,) for q in rules if _under(q, p)])
+    c.commit()
 
 
 def split_combine(combine_id: int) -> bool:
@@ -837,13 +988,20 @@ def match_images(c, overrides, reader: _Reader):
       release pictures also count as that model's pictures.
     * A correction rule naming a model (or "" for the release) wins over all of that.
     """
-    files = c.execute("SELECT logical_path, model, model_id, model_root, release, hidden FROM files").fetchall()
+    files = c.execute("SELECT logical_path, model, model_id, model_root, release, hidden, owner, public FROM files").fetchall()
     roots: dict[str, tuple] = {}
     loose: dict[str, dict] = defaultdict(dict)
-    by_release: dict[str, dict] = defaultdict(dict)
-    release_models: dict[str, set] = defaultdict(set)
+    # Keyed by (owner, release): pictures only go to models of whoever they belong to.
+    by_release: dict[tuple, dict] = defaultdict(dict)
+    release_models: dict[tuple, set] = defaultdict(set)
+    public_models: set[str] = set()
+    public_releases: set[tuple] = set()
+    owners = owner_ids()
     for f in files:
         info = (f["model_id"], f["release"], f["hidden"])
+        if f["public"]:
+            public_models.add(f["model_id"])
+            public_releases.add((f["owner"], f["release"]))
         lp = PurePosixPath(f["logical_path"])
         keys = [" ".join(_words(f["model"], f["release"]))]
         if f["model_root"] != f["logical_path"]:
@@ -855,14 +1013,15 @@ def match_images(c, overrides, reader: _Reader):
                     loose[str(lp.parent)].setdefault(k, info)
         for k in keys:
             if k:
-                by_release[f["release"]].setdefault(k, info)
+                by_release[(f["owner"], f["release"])].setdefault(k, info)
         if not f["hidden"]:
-            release_models[f["release"]].add(f["model_id"])
+            release_models[(f["owner"], f["release"])].add(f["model_id"])
 
     known = {f["model_id"] for f in files}  # a picture rule naming a model that no longer exists is ignored
     updates = []
     for r in c.execute("SELECT id, logical_path FROM images").fetchall():
         lp = PurePosixPath(r["logical_path"])
+        owner = owner_of(r["logical_path"], owners)
         folders = list(lp.parent.parts)
         g = reader.guess(r["logical_path"])
         release = g.release
@@ -877,22 +1036,25 @@ def match_images(c, overrides, reader: _Reader):
                 forced = o["model"] if o["model"] is not None else forced
         cover = bool(_COVER_WORDS & set(classify.norm(lp.stem).split()))
         rank = (0 if cover else 100) + len(folders)
-        if forced is not None and (not forced or model_id(release, forced) in known):
-            info = (model_id(release, forced), release, 0) if forced else None
+        if forced is not None and (not forced or model_id(release, forced, owner) in known):
+            info = (model_id(release, forced, owner), release, 0) if forced else None
         else:
             info = next((roots[p] for p in ("/".join(folders[:i]) for i in range(len(folders), 0, -1))
                          if p in roots), None)
             names = [_words(lp.stem, release_raw)] + [_words(f, release_raw) for f in reversed(folders[depth + 1:])]
             info = (info or _name_match(names[0], loose.get(str(lp.parent), {}))
-                    or next(filter(None, (_name_match(n, by_release.get(release, {})) for n in names)), None))
+                    or next(filter(None, (_name_match(n, by_release.get((owner, release), {})) for n in names)), None))
         if info:
             mid, release, model_hidden = info
-            updates.append((release, mid, "model", rank, int(hidden or model_hidden), r["id"]))
+            updates.append((release, mid, "model", rank, int(hidden or model_hidden), owner,
+                            int(mid in public_models), r["id"]))
         else:
-            only = release_models.get(release, set())
+            only = release_models.get((owner, release), set())
             mid = next(iter(only)) if len(only) == 1 and forced != "" else ""
-            updates.append((release, mid, "release", rank, hidden, r["id"]))
-    c.executemany("UPDATE images SET release=?, model_id=?, scope=?, rank=?, hidden=? WHERE id=?", updates)
+            updates.append((release, mid, "release", rank, hidden, owner,
+                            int((owner, release) in public_releases), r["id"]))
+    c.executemany("UPDATE images SET release=?, model_id=?, scope=?, rank=?, hidden=?, owner=?, public=? WHERE id=?",
+                  updates)
 
 
 def _ids_in_chunks(q: str, ids: list[str]):
@@ -956,32 +1118,40 @@ def cover_image_ids(model_ids: list[str]) -> dict[str, int]:
 
 def _image_dict(r):
     return {"id": r["id"], "name": r["name"], "path": r["logical_path"], "scope": r["scope"],
-            "release": r["release"], "model_id": r["model_id"],
+            "release": r["release"], "model_id": r["model_id"], "owner": r["owner"],
             "archive": r["rel_path"] if r["member"] else None, "size": r["size"]}
 
 
-def model_images(model_id: str, release: str = "") -> list[dict]:
+def model_images(model_id: str, release: str = "", owner: int = db.MAIN_ADMIN) -> list[dict]:
     """A model's pictures, its main picture first. `main_model` / `main_release`
     flag the pictures picked as main for the model and for its release."""
     rows = db.conn().execute("SELECT * FROM images WHERE model_id=? AND hidden=0 AND preview != 'error' "
                              "ORDER BY scope != 'model', rank, name COLLATE NOCASE", (model_id,)).fetchall()
     main_model = main_picture_ids("model", [model_id]).get(model_id)
-    main_release = main_picture_ids("release", [release]).get(release) if release else None
+    key = release_key(release, owner)
+    main_release = main_picture_ids("release", [key]).get(key) if release else None
     out = [{**_image_dict(r), "main_model": r["id"] == main_model, "main_release": r["id"] == main_release}
            for r in rows]
     return sorted(out, key=lambda d: not d["main_model"])
 
 
-def release_images(release: str) -> list[dict]:
+def release_images(release: str, where: str = "1", args: list = ()) -> list[dict]:
     """A release's pictures, its main picture first. The main picture may be one
-    of its models' pictures, picked from the model window."""
+    of its models' pictures, picked from the model window. `where` limits them to the
+    pictures the viewer may see (and its owners' main pictures)."""
     c = db.conn()
-    rows = c.execute("SELECT * FROM images WHERE release=? AND scope='release' AND hidden=0 "
-                     "AND preview != 'error' ORDER BY rank, name COLLATE NOCASE", (release,)).fetchall()
-    main = main_picture_ids("release", [release]).get(release)
-    out = [{**_image_dict(r), "main": r["id"] == main} for r in rows if r["id"] != main]
-    if main:
-        out.insert(0, {**_image_dict(c.execute("SELECT * FROM images WHERE id=?", (main,)).fetchone()), "main": True})
+    rows = c.execute(f"SELECT * FROM images WHERE release=? AND scope='release' AND hidden=0 "
+                     f"AND preview != 'error' AND {where} ORDER BY rank, name COLLATE NOCASE", (release, *args)).fetchall()
+    owners = [r[0] for r in c.execute(f"SELECT DISTINCT owner FROM files WHERE release=? AND hidden=0 AND {where} "
+                                      "ORDER BY owner", (release, *args))]
+    keys = [release_key(release, o) for o in owners]
+    picked = main_picture_ids("release", keys)
+    mains = [picked[k] for k in keys if k in picked]
+    out = [{**_image_dict(r), "main": False} for r in rows if r["id"] not in mains]
+    for main in reversed(mains):
+        row = c.execute(f"SELECT * FROM images WHERE id=? AND {where}", (main, *args)).fetchone()
+        if row:
+            out.insert(0, {**_image_dict(row), "main": True})
     return out
 
 

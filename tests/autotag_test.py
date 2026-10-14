@@ -62,41 +62,41 @@ c.execute("INSERT INTO mmf_links(item_id, source, collection) VALUES (1, 'purcha
 c.execute("DELETE FROM settings WHERE key='mmf_autotag_v'")
 c.commit()
 db.init()
-mmf.set_tags([1], ["scifi", "ork"], [])
+mmf.set_tags(db.MAIN_ADMIN, [1], ["scifi", "ork"], [])
 FIRST = [item(1, "Orc Warboss"), item(2, "Orc Warboss Bust", tags=["Warhammer", "Orc"]),
          item(3, "Grot Mob"), item(4, "Ork Shoota Boyz"),
          item(5, "Elf Ranger", creator="Elf Folk", source="tribe", collection="Elf Folk Tribe · 02/2024"),
          item(6, "Forest Ruins", creator="Elf Folk", source="tribe", collection="Elf Folk Tribe · 02/2024")]
-res = mmf.import_library({"items": FIRST, "complete": ["purchase", "tribe"]})
-own = mmf.own_tags()
+res = mmf.import_library({"items": FIRST, "complete": ["purchase", "tribe"]}, db.MAIN_ADMIN)
+own = mmf.own_tags(db.MAIN_ADMIN)
 assert own[1] == ["ork", "scifi"], "an item from before isn't tagged again"
 assert own[2] == ["bust", "ork", "scifi"], own[2]  # genre from the creator's other item, not "Orc" again
-assert mmf.item(2)["mmf_tags"] == ["Warhammer", "Orc"], "MyMiniFactory's own tags arrive with the sync"
+assert mmf.item(db.MAIN_ADMIN, 2)["mmf_tags"] == ["Warhammer", "Orc"], "MyMiniFactory's own tags arrive with the sync"
 assert own[3] == ["goblin", "scifi"] and own[4] == ["ork", "scifi"], own
 assert own[5] == ["elf", "fantasy"] and own[6] == ["fantasy", "terrain"], own
 assert res["autotagged"] == 5, res
 
 # Tags the user removes or adds stay that way on later syncs.
-mmf.set_tags([4], ["painted"], ["scifi"])
+mmf.set_tags(db.MAIN_ADMIN, [4], ["painted"], ["scifi"])
 SECOND = FIRST + [item(7, "Ork Deff Kopta", tags=["Sci-Fi"]),
                   item(8, "Elf Archer", creator="Elf Folk", source="tribe", collection="Elf Folk Tribe · 03/2024")]
-res = mmf.import_library({"items": SECOND, "complete": ["purchase", "tribe"]})
-own = mmf.own_tags()
+res = mmf.import_library({"items": SECOND, "complete": ["purchase", "tribe"]}, db.MAIN_ADMIN)
+own = mmf.own_tags(db.MAIN_ADMIN)
 assert own[4] == ["ork", "painted"], own[4]
 assert own[7] == ["ork", "scifi"] and own[8] == ["elf", "fantasy"], own
 assert res["autotagged"] == 2, res
 
 # An item that drops out of a sync and comes back keeps its tags and isn't tagged again.
-mmf.set_tags([3], [], ["goblin"])
-mmf.import_library({"items": [x for x in SECOND if x["id"] != 3], "complete": ["purchase", "tribe"]})
-assert not mmf.item(3)
-assert mmf.import_library({"items": SECOND, "complete": ["purchase", "tribe"]})["autotagged"] == 0
-assert mmf.own_tags()[3] == ["scifi"]
+mmf.set_tags(db.MAIN_ADMIN, [3], [], ["goblin"])
+mmf.import_library({"items": [x for x in SECOND if x["id"] != 3], "complete": ["purchase", "tribe"]}, db.MAIN_ADMIN)
+assert not mmf.item(db.MAIN_ADMIN, 3)
+assert mmf.import_library({"items": SECOND, "complete": ["purchase", "tribe"]}, db.MAIN_ADMIN)["autotagged"] == 0
+assert mmf.own_tags(db.MAIN_ADMIN)[3] == ["scifi"]
 
 # Tags are spelled the way the library spells them.
 c.execute("INSERT INTO model_tags(model_id, tag) VALUES ('m1', 'Fantasy')")
 c.commit()
 mmf.import_library({"items": SECOND + [item(9, "Wizard of the Woods", creator="Someone Else")],
-                    "complete": ["purchase", "tribe"]})
-assert mmf.own_tags()[9] == ["Fantasy", "human"], mmf.own_tags()[9]
+                    "complete": ["purchase", "tribe"]}, db.MAIN_ADMIN)
+assert mmf.own_tags(db.MAIN_ADMIN)[9] == ["Fantasy", "human"], mmf.own_tags(db.MAIN_ADMIN)[9]
 print("autotag ok")

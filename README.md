@@ -9,6 +9,26 @@ groups them by **release** and **model**, separates **supported** and
 
 ## How it works
 
+* **Accounts.** Everyone logs in with their own username and password. The
+  first visit creates the admin account, which owns the library as it is, keeps
+  the Settings and the NAS folder copy, and adds the
+  other accounts under *your name ▾* → *Manage users…* (there is no open
+  sign-up). Each person sees their own models and everyone's public ones; *All
+  models* / *My models* at the top of the sidebar switches between the two.
+  Models start private: make one public with *Make public* in its window,
+  several with *Select models* → *Edit…* → *Who can see them*, or all of them
+  under *your name ▾* → *Your models are*. Other people's models open read-only
+  and say who uploaded them; only their owner or an admin can change them. An
+  admin who ticks *Admin mode* in the header sees everyone's models, private ones
+  too. Uploads by other users go into their own folder in the library,
+  `_users/<username>/`, read like the top of the library, so two people's
+  releases with the same name never mix. Removing an account keeps its models,
+  with their tags and settings, now shown as uploaded by *user_removed*. An
+  admin can claim them into their own library with *Claim* in a model's window,
+  *Claim the ones from removed accounts* when editing several, or *Claim all* in *Users*. A new
+  account with the same name gets a fresh folder and doesn't see them. A forgotten password is
+  reset by an admin, or for the admin itself with
+  `docker exec -it resin-models python -m app.auth reset-password <username>`.
 * **Import files from the browser.** Click *Import files*, or drop files,
   folders or `.zip` / `.7z` archives anywhere on the page. They are uploaded
   into the app's library folder and indexed straight away. Archives stay
@@ -118,7 +138,9 @@ groups them by **release** and **model**, separates **supported** and
   These choices are kept across re-indexing.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
-* **Your MyMiniFactory library.** MyMiniFactory has no API for a user's
+* **Your MyMiniFactory library.** Every account syncs its own MyMiniFactory
+  library, compared with the models that person uploaded, and only they see it
+  and its tags. MyMiniFactory has no API for a user's
   purchases, pledges or tribes, so *Sync* (next to MyMiniFactory in the sidebar)
   gives you a bookmark to drag to your bookmarks bar. Click it on
   myminifactory.com while logged in: it reads your library the way the site's
@@ -216,7 +238,8 @@ from a checkout.
 
 ### First run
 
-Click **Import files** (or drop files on the page). Indexing progress shows in
+Open the app and create the admin account (it owns everything already in the
+library). Then click **Import files** (or drop files on the page). Indexing progress shows in
 the header. Rendering previews for a large library takes a while the first
 time; after that they come from the cache.
 
@@ -226,7 +249,7 @@ folder*.
 
 ### Settings
 
-The ⚙ button in the header holds the rest: the layout of a library copied
+The ⚙ button in the header (admins only) holds the rest: the layout of a library copied
 from the NAS folder (`Release/...` or `Creator/Release/...`; browser imports
 don't use it), your preferred file format and supported/unsupported version
 (the model window shows only those by default, with buttons to switch to the
@@ -253,6 +276,7 @@ pip install -r requirements.txt
 python tests/make_sample_library.py /tmp/rmm/src
 SOURCE_DIR=/tmp/rmm/src LIBRARY_DIR=/tmp/rmm/lib DATA_DIR=/tmp/rmm/data uvicorn app.main:app --port 8417
 python tests/smoke_test.py http://localhost:8417 /tmp/rmm/src
+python tests/users_test.py http://localhost:8417  # accounts, public / private, admin mode
 pip install playwright && python tests/mmf_test.py http://localhost:8417  # MyMiniFactory sync on a fake site
 ```
 

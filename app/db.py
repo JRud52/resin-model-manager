@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS files (
     preview TEXT NOT NULL DEFAULT 'pending', -- pending | ok | none | error
     preview_error TEXT,
     seen INTEGER NOT NULL DEFAULT 0,
+    owner INTEGER NOT NULL DEFAULT 1,  -- users.id of who uploaded it (see library.owner_of); 1 = the main admin
+    public INTEGER NOT NULL DEFAULT 0, -- 1 = every user can see it (see the visibility table)
     UNIQUE(rel_path, member)
 );
 CREATE INDEX IF NOT EXISTS files_model ON files(model_id);
@@ -49,6 +51,8 @@ CREATE TABLE IF NOT EXISTS images (
     preview TEXT NOT NULL DEFAULT 'pending',
     preview_error TEXT,
     seen INTEGER NOT NULL DEFAULT 0,
+    owner INTEGER NOT NULL DEFAULT 1,
+    public INTEGER NOT NULL DEFAULT 0, -- follows the model (or the owner's models in the release)
     UNIQUE(rel_path, member)
 );
 CREATE INDEX IF NOT EXISTS images_model ON images(model_id);
@@ -120,8 +124,8 @@ CREATE TABLE IF NOT EXISTS path_maps (
     created REAL DEFAULT (strftime('%s','now'))
 );
 
--- The user's MyMiniFactory library (purchases, pledges, tribes), sent by the sync
--- bookmarklet from their logged-in browser. Only listed here; nothing is downloaded.
+-- The users' MyMiniFactory libraries (purchases, pledges, tribes), sent by the sync
+-- bookmarklet from their logged-in browser; whose they are is in mmf_links. Only listed here; nothing is downloaded.
 CREATE TABLE IF NOT EXISTS mmf_items (
     id INTEGER PRIMARY KEY,          -- MyMiniFactory object id
     name TEXT NOT NULL,
@@ -143,22 +147,26 @@ CREATE TABLE IF NOT EXISTS mmf_items (
 -- Tags added in the app to MyMiniFactory items (their own tags from the site are in mmf_items.tags).
 -- Kept when the item drops out of a sync, so they come back with it.
 CREATE TABLE IF NOT EXISTS mmf_item_tags (
+    owner INTEGER NOT NULL DEFAULT 1,  -- users.id: each user tags the items of their own library
     item_id INTEGER NOT NULL,
     tag TEXT NOT NULL COLLATE NOCASE,
-    PRIMARY KEY (item_id, tag)
+    PRIMARY KEY (owner, item_id, tag)
 );
 
 -- MyMiniFactory items that have had their best-guess tags (autotag.py), so a later sync
 -- doesn't add them again, even to a tag the user has since removed.
 CREATE TABLE IF NOT EXISTS mmf_autotagged (
-    item_id INTEGER PRIMARY KEY
+    owner INTEGER NOT NULL DEFAULT 1,
+    item_id INTEGER NOT NULL,
+    PRIMARY KEY (owner, item_id)
 );
 
 CREATE TABLE IF NOT EXISTS mmf_links (
+    owner INTEGER NOT NULL DEFAULT 1,  -- users.id whose MyMiniFactory library has the item
     item_id INTEGER NOT NULL,
     source TEXT NOT NULL,
     collection TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (item_id, source, collection)
+    PRIMARY KEY (owner, item_id, source, collection)
 );
 
 -- Models combined into one: every model of the release named in parts becomes an
@@ -169,7 +177,44 @@ CREATE TABLE IF NOT EXISTS model_combines (
     release TEXT NOT NULL COLLATE NOCASE,
     name TEXT NOT NULL,
     parts TEXT NOT NULL,             -- JSON list of the former model names
+    owner INTEGER NOT NULL DEFAULT 1, -- only that user's models are combined
     created REAL DEFAULT (strftime('%s','now'))
+);
+
+-- People who can log in. Id 1 is the main admin, who owns everything not uploaded by someone
+-- else (the existing library, copies from the NAS folder, MyMiniFactory). Other users' uploads
+-- go into their own folder, LIBRARY/_users/<username>/.
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused, so a removed user's combines never pass to someone new
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password TEXT NOT NULL,          -- pbkdf2_sha256$iterations$salt$hash
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    default_public INTEGER NOT NULL DEFAULT 0, -- their models without a visibility rule are public
+    folder TEXT NOT NULL DEFAULT '',  -- where their uploads go (_users/<username>); '' for the main admin
+    created REAL DEFAULT (strftime('%s','now'))
+);
+
+-- Who owns what is in users' folders: their own folder when the account is made, REMOVED_USER
+-- once the account is removed, and an admin for what they claimed (a whole folder or one model's
+-- folder). Longest prefix wins; anything else belongs to the main admin.
+CREATE TABLE IF NOT EXISTS folder_owners (
+    folder TEXT PRIMARY KEY,
+    owner INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,          -- sha256 of the cookie value
+    user_id INTEGER NOT NULL,
+    admin_mode INTEGER NOT NULL DEFAULT 0, -- an admin seeing everyone's models, private ones too
+    created REAL NOT NULL,
+    seen REAL NOT NULL
+);
+
+-- Public / private set on a model (prefix = its model_root) or more. Longest prefix wins;
+-- files without one follow their owner's default_public.
+CREATE TABLE IF NOT EXISTS visibility (
+    prefix TEXT PRIMARY KEY,
+    public INTEGER NOT NULL
 );
 
 -- Values saved from the Settings dialog (see settings.py).
@@ -193,6 +238,12 @@ CREATE TABLE IF NOT EXISTS overrides (
 );
 """
 
+# users.id of the main admin: the first account, made on the first visit.
+MAIN_ADMIN = 1
+# Owner of the models of a removed account, until an admin claims them; shown as REMOVED_NAME.
+REMOVED_USER = 0
+REMOVED_NAME = "user_removed"
+
 _local = threading.local()
 
 
@@ -213,6 +264,18 @@ def init():
     c.executescript(SCHEMA)
     if "listed" not in {r["name"] for r in c.execute("PRAGMA table_info(archives)")}:
         c.execute("ALTER TABLE archives ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
+    for table, col, decl in (("files", "owner", "INTEGER NOT NULL DEFAULT 1"), ("files", "public", "INTEGER NOT NULL DEFAULT 0"),
+                             ("images", "owner", "INTEGER NOT NULL DEFAULT 1"), ("images", "public", "INTEGER NOT NULL DEFAULT 0"),
+                             ("model_combines", "owner", "INTEGER NOT NULL DEFAULT 1")):
+        if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    c.execute("CREATE INDEX IF NOT EXISTS files_owner ON files(owner)")
+    if "folder" not in {r["name"] for r in c.execute("PRAGMA table_info(users)")}:
+        c.execute("ALTER TABLE users ADD COLUMN folder TEXT NOT NULL DEFAULT ''")
+    for r in c.execute("SELECT id, username FROM users WHERE folder = '' AND id != ?", (MAIN_ADMIN,)).fetchall():
+        folder = f"{config.USERS_FOLDER}/{r['username']}"
+        c.execute("UPDATE users SET folder = ? WHERE id = ?", (folder, r["id"]))
+        c.execute("INSERT OR IGNORE INTO folder_owners(folder, owner) VALUES (?, ?)", (folder, r["id"]))
     if "creator" not in {r["name"] for r in c.execute("PRAGMA table_info(overrides)")}:
         c.execute("ALTER TABLE overrides ADD COLUMN creator TEXT")
     mmf_cols = {r["name"] for r in c.execute("PRAGMA table_info(mmf_items)")}
@@ -226,8 +289,17 @@ def init():
     if not c.execute("SELECT 1 FROM settings WHERE key='mmf_gallery_v'").fetchone():
         c.execute("UPDATE mmf_items SET gallery=''")
         c.execute("INSERT INTO settings(key, value) VALUES('mmf_gallery_v', '2')")
+    # Before accounts the MyMiniFactory library was the main admin's alone; now each user has their own.
+    for table, cols in (("mmf_links", "item_id, source, collection"), ("mmf_item_tags", "item_id, tag"),
+                        ("mmf_autotagged", "item_id")):
+        if "owner" not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+            c.executescript(SCHEMA)
+            c.execute(f"INSERT INTO {table}(owner, {cols}) SELECT {MAIN_ADMIN}, {cols} FROM {table}_old")
+            c.execute(f"DROP TABLE {table}_old")
+    c.execute("UPDATE settings SET key = ? WHERE key = 'mmf_synced'", (f"mmf_synced:{MAIN_ADMIN}",))
     # Items synced before 0.13 were tagged by hand; only items new to a sync get best-guess tags.
     if not c.execute("SELECT 1 FROM settings WHERE key='mmf_autotag_v'").fetchone():
-        c.execute("INSERT OR IGNORE INTO mmf_autotagged(item_id) SELECT id FROM mmf_items")
+        c.execute("INSERT OR IGNORE INTO mmf_autotagged(owner, item_id) SELECT owner, item_id FROM mmf_links")
         c.execute("INSERT INTO settings(key, value) VALUES('mmf_autotag_v', '1')")
     c.commit()

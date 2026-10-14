@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resin Model Manager</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+<form id="loginForm" class="card-form login-card">
+  <h1>Resin Models</h1>
+  <p id="setupNote" class="muted small hidden">Welcome! Create the admin account first. It owns the library as it is now, keeps the settings, and can add accounts for other people.</p>
+  <label>Username <input name="username" autocomplete="username" required autofocus></label>
+  <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+  <label id="againRow" class="hidden">Password again <input name="again" type="password" autocomplete="new-password"></label>
+  <p id="loginErr" class="small err"></p>
+  <button id="loginBtn" class="primary">Log in</button>
+</form>
+<script>
+const form = document.getElementById("loginForm");
+let setup = false;
+fetch("/api/auth/state").then((r) => r.json()).then((s) => {
+  setup = s.setup;
+  if (!setup) return;
+  document.getElementById("setupNote").classList.remove("hidden");
+  document.getElementById("againRow").classList.remove("hidden");
+  form.password.autocomplete = "new-password";
+  form.again.required = true;
+  document.getElementById("loginBtn").textContent = "Create admin account";
+});
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("loginErr");
+  if (setup && form.password.value !== form.again.value) { err.textContent = "The passwords don't match."; return; }
+  err.textContent = "";
+  const r = await fetch(setup ? "/api/auth/setup" : "/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: form.username.value, password: form.password.value }),
+  });
+  if (r.ok) { location.reload(); return; }
+  const detail = (await r.json().catch(() => ({}))).detail;
+  err.textContent = Array.isArray(detail) ? detail.map((d) => d.msg).join("; ") : detail || r.statusText;
+});
+</script>
+</body>
+</html>

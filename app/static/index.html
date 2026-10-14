@@ -27,10 +27,17 @@
   <div id="jobStatus" class="muted"></div>
   <button id="importBtn" class="primary">Import files</button>
   <button id="rulesBtn" class="icon" title="Corrections">✎</button>
-  <button id="settingsBtn" class="icon" title="Settings">⚙</button>
+  <button id="settingsBtn" class="icon admin-only" title="Settings">⚙</button>
+  <label id="adminModeWrap" class="admin-toggle admin-only" title="See everyone's models, private ones too"><input type="checkbox" id="adminMode"> Admin mode</label>
+  <button id="userBtn" title="Your account"><span id="userName"></span> ▾</button>
 </header>
 <div id="layout">
   <aside id="sidebar">
+    <div class="side-title" data-sec="show"><span class="sec-name">Show</span><span class="sec-now"></span></div>
+    <ul id="scopeList">
+      <li data-scope=""><span class="name">All models</span></li>
+      <li data-scope="mine"><span class="name">My models</span></li>
+    </ul>
     <div class="side-title" data-sec="creators"><span class="sec-name">Creators</span><span class="sec-now"></span> <button id="editCreatorsBtn" class="link" title="Set the creator of several releases">Edit</button></div>
     <div class="side-filter hidden"><input type="search" data-for="creators" placeholder="Filter creators…" autocomplete="off"></div>
     <ul id="creators"></ul>
@@ -56,7 +63,7 @@
       <div id="activeTags" class="badges"></div>
       <div class="spacer"></div>
       <button id="combineBtn" class="hidden" title="Pick several models to edit together or combine into one">Select models</button>
-      <button id="renameCreatorBtn" class="hidden" title="Change how this creator's name is shown">Rename creator</button>
+      <button id="renameCreatorBtn" class="hidden admin-only" title="Change how this creator's name is shown">Rename creator</button>
       <button id="releaseCreatorBtn" class="hidden">Set creator</button>
       <button id="releaseTagBtn" class="hidden">Tag all models in this release</button>
     </div>
@@ -95,9 +102,12 @@
         <span id="mTags" class="badges"></span>
         <input id="mTagInput" list="tagOptions" placeholder="+ add tag" autocomplete="off">
       </div>
+      <div id="mOwner" class="small muted"></div>
     </div>
     <div class="spacer"></div>
-    <button id="mMapBtn" title="Say which folders in the path are the creator, release and model">Map folders</button>
+    <button id="mClaimBtn" class="admin-only hidden" title="Its account was removed: make it yours, in your library">Claim</button>
+    <button id="mVisBtn" title="Who can see this model"></button>
+    <button id="mMapBtn" class="admin-only" title="Say which folders in the path are the creator, release and model">Map folders</button>
     <button id="mEditBtn">Edit</button>
     <button class="icon" data-close>✕</button>
   </div>
@@ -153,7 +163,7 @@
     <div class="row">
       <button value="save" class="primary">Save</button>
       <button value="hide" id="hideFileBtn">Hide</button>
-      <button value="map" title="Say which folders in this path are the creator, release and model">Map folders…</button>
+      <button value="map" class="admin-only" title="Say which folders in this path are the creator, release and model">Map folders…</button>
       <button value="cancel">Cancel</button>
     </div>
   </form>
@@ -180,13 +190,15 @@
   <div class="dlg-head"><h2>Corrections</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
   <p class="muted small">Each rule applies to every file whose path starts with the folder shown. Delete a rule to go back to the automatic guess.</p>
   <table id="rulesTable"></table>
+  <div class="admin-only">
   <h3>Folder mappings</h3>
   <p class="muted small">Each mapping says which folder levels are the creator, release and model for every file in the folder shown. Use <b>Map folders</b> on a model to add one.</p>
   <table id="mapsTable"></table>
+  </div>
   <h3>Combined models</h3>
   <p class="muted small">Models combined into one, each former model now an option group. Use <b>Select models</b>, then <b>Combine…</b>, to add one; Split makes them separate models again.</p>
   <table id="combinesTable"></table>
-  <div class="row" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
+  <div class="row admin-only" style="margin-top:12px"><button id="retryBtn">Retry failed previews</button></div>
 </dialog>
 
 <dialog id="importDlg">
@@ -217,7 +229,7 @@
       <button id="clearQueue" disabled>Clear</button>
     </div>
   </div>
-  <div id="sourceImport" class="hidden">
+  <div id="sourceImport" class="hidden admin-only">
     <p class="muted small">A NAS folder is mounted at <code id="sourceDir"></code>. You can also copy everything in it into the library; the originals are only read.</p>
     <button id="sourceImportBtn">Copy from NAS folder</button>
   </div>
@@ -318,6 +330,14 @@
         <option value="-1">Unknown</option>
       </select>
     </label>
+    <label>Who can see them
+      <select name="public">
+        <option value="">(keep)</option>
+        <option value="1">Public: everyone</option>
+        <option value="0">Private: only the owner</option>
+      </select>
+    </label>
+    <label class="check admin-only"><input type="checkbox" name="claim"> Claim the ones from removed accounts (they become yours)</label>
     <label class="check"><input type="checkbox" name="hide"> Hide these models (undo from Corrections)</label>
     <p class="muted small">Changes are stored as correction rules and survive new imports; your files are never renamed.</p>
     <p class="small err" id="bulkErr"></p>
@@ -374,6 +394,54 @@
     <button id="mmfClear">Remove MyMiniFactory list</button>
   </div>
   <p class="muted small">The upload is for when the bookmark can't open the Resin Models window: it saves that file instead.</p>
+</dialog>
+
+<dialog id="accountDlg">
+  <div class="dlg-head"><h2 id="acTitle">Your account</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
+  <form id="acVisForm" class="card-form">
+    <label>Your models are
+      <select name="default_public">
+        <option value="0">Private: only you can see them</option>
+        <option value="1">Public: everyone who logs in can see them</option>
+      </select>
+    </label>
+    <p class="muted small">Applies to all your models, including ones you set one by one, and to what you upload later.
+      You can still make single models public or private from the model window, or several with <b>Select models</b> → <b>Edit…</b>.</p>
+    <div class="row"><button class="primary">Apply to all my models</button><span id="acVisMsg" class="small muted"></span></div>
+  </form>
+  <form id="acPwForm" class="card-form">
+    <label>Current password <input name="current" type="password" autocomplete="current-password" required></label>
+    <label>New password <input name="password" type="password" autocomplete="new-password" required minlength="6"></label>
+    <div class="row"><button>Change password</button><span id="acPwMsg" class="small muted"></span></div>
+  </form>
+  <div class="row">
+    <button id="usersBtn" class="admin-only">Manage users…</button>
+    <div class="spacer"></div>
+    <button id="logoutBtn">Log out</button>
+  </div>
+</dialog>
+
+<dialog id="usersDlg">
+  <div class="dlg-head"><h2>Users</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
+  <p class="muted small">Everyone logs in with their own username and password. Each person sees their own models and
+    everyone's public ones; uploads go into their own folder in the library (<code>_users/&lt;username&gt;</code>).
+    Admins can change anyone's models, keep the settings, and see everything in admin mode.</p>
+  <table id="usersTable"></table>
+  <div id="removedUsers" class="hidden">
+    <h3>From removed accounts</h3>
+    <p class="muted small">Models of removed accounts stay in the library as <b>user_removed</b>'s. Claim them to make them yours,
+      all at once here, or one by one with <b>Claim</b> in a model's window (or <b>Select models</b> → <b>Edit…</b>).
+      Turn on admin mode to see the private ones.</p>
+    <table id="removedTable"></table>
+  </div>
+  <form id="addUserForm" class="card-form">
+    <h3>Add someone</h3>
+    <label>Username <input name="username" autocomplete="off" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,31}" title="Letters, digits, dots, dashes or underscores"></label>
+    <label>Password <input name="password" type="password" autocomplete="new-password" required minlength="6"></label>
+    <label class="check"><input type="checkbox" name="is_admin"> Admin</label>
+    <p class="small err" id="addUserErr"></p>
+    <div class="row"><button class="primary">Add user</button></div>
+  </form>
 </dialog>
 
 <div id="version" class="muted"></div>

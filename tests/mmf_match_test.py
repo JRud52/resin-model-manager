@@ -35,7 +35,7 @@ for i, (creator, release, model) in enumerate(LOCAL):
               "VALUES (?,?,?,?,?,?,?,?,?,?)", (f"f{i}.stl", f"f{i}.stl", f"f{i}.stl", ".stl", 1, 0, creator, release,
                                                model, f"m{i}"))
 c.commit()
-index = mmf._local_index()
+index = mmf._local_index(db.MAIN_ADMIN)
 
 CASES = [  # MyMiniFactory title, creator, expected release (None = not in the library)
     ("Bestiarum Miniatures September 2023 Release", "Bestiarum Miniatures", "Bestiarum - September 2023"),
@@ -70,6 +70,6 @@ assert not bad, f"{bad} wrong matches"
 # A creator renamed in the app is one creator: Lord of the Print now goes by Rescale Miniatures.
 assert not index.match("Halfling Rogue", "Nerikson")
 mmf.rename_creator("Lord of the Print", "Rescale Miniatures")
-got = mmf._local_index().match("Goblins (Pre-Supported)", "Rescale Miniatures")
+got = mmf._local_index(db.MAIN_ADMIN).match("Goblins (Pre-Supported)", "Rescale Miniatures")
 assert got and got["release"] == "Welcome Pack", got
 print("MATCH OK")
