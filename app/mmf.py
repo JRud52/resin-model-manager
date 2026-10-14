@@ -1,10 +1,14 @@
-"""The user's MyMiniFactory library, listed next to the local one.
+"""Each user's MyMiniFactory library, listed next to the local one.
 
 MyMiniFactory has no API for a user's purchases, pledges or tribes, so the sync
 bookmarklet (static/mmf-bookmarklet.js) reads them from the website's own library
 page in the user's logged-in browser and posts them here. No MyMiniFactory login
 is ever stored by the app. Items marked for download are fetched by the same
 bookmarklet (it has the login) on its next run and uploaded into the library.
+
+Every user syncs their own MyMiniFactory account: an item is theirs through their rows in
+mmf_links (`owner`), and is matched against the models they uploaded. The items themselves
+(names, pictures, the site's tags) are shared, since they are the same for everyone who has them.
 """
 from __future__ import annotations
 
@@ -78,7 +82,7 @@ def has_tags(item_tags: list[str], wanted: list[str]) -> bool:
     return all(t.casefold() in have for t in wanted)
 
 
-def import_library(payload: dict) -> dict:
+def import_library(payload: dict, owner: int) -> dict:
     """Store a sync. payload = {"items": [...], "complete": ["purchase", ...]}.
 
     Items of a source listed in `complete` that are missing from this sync are
@@ -127,7 +131,7 @@ def import_library(payload: dict) -> dict:
     c = db.conn()
     with c:
         for s in complete:
-            c.execute("DELETE FROM mmf_links WHERE source=?", (s,))
+            c.execute("DELETE FROM mmf_links WHERE source=? AND owner=?", (s, owner))
         c.executemany("""INSERT INTO mmf_items(id, name, creator, creator_url, url, image, images, downloads, tags,
                          published, updated)
                          VALUES (:id, :name, :creator, :creator_url, :url, :image, :images, :downloads, :tags,
@@ -138,32 +142,41 @@ def import_library(payload: dict) -> dict:
                          published=COALESCE(NULLIF(excluded.published, ''), mmf_items.published),
                          updated=excluded.updated""",
                       [{"id": k, **v, "updated": now} for k, v in rows.items()])
-        c.executemany("INSERT OR IGNORE INTO mmf_links(item_id, source, collection) VALUES (?,?,?)", sorted(links))
+        c.executemany("INSERT OR IGNORE INTO mmf_links(item_id, source, collection, owner) VALUES (?,?,?,?)",
+                      [(*link, owner) for link in sorted(links)])
         c.execute("DELETE FROM mmf_items WHERE id NOT IN (SELECT item_id FROM mmf_links)")
-        c.execute("INSERT INTO settings(key, value) VALUES('mmf_synced', ?) "
-                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(now),))
-        tagged = _autotag(c, links)
-    return {"items": len(rows), "autotagged": tagged, **status()}
+        c.execute("INSERT INTO settings(key, value) VALUES(?, ?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_synced_key(owner), str(now)))
+        tagged = _autotag(c, links, owner)
+    return {"items": len(rows), "autotagged": tagged, **status(owner)}
 
 
-def _autotag(c, links: set) -> int:
+def _synced_key(owner: int) -> str:
+    return f"mmf_synced:{owner}"
+
+
+_MINE = "i.id IN (SELECT item_id FROM mmf_links WHERE owner = ?)"  # the items in one user's library
+
+
+def _autotag(c, links: set, owner: int) -> int:
     """Best-guess tags (autotag.py) on items no sync has tagged before, as tags of their own that
     the user can remove. The genre and race hints come from the tags the creator's other items
-    and local models, and the release's other items, already have. Returns the items tagged."""
-    new = [r for r in c.execute("SELECT id, name, creator, tags FROM mmf_items WHERE id NOT IN "
-                                "(SELECT item_id FROM mmf_autotagged)")]
+    and local models, and the release's other items, already have (all the owner's). Returns the
+    items tagged."""
+    new = [r for r in c.execute(f"SELECT i.id, i.name, i.creator, i.tags FROM mmf_items i WHERE {_MINE} AND i.id NOT IN "
+                                "(SELECT item_id FROM mmf_autotagged WHERE owner = ?)", (owner, owner))]
     if not new:
         return 0
     new_ids = {r["id"] for r in new}
     names = creator_names()
-    own = own_tags()
+    own = own_tags(owner)
     by_creator: dict[str, list[list[str]]] = {}
     by_collection: dict[str, list[list[str]]] = {}
     collections: dict[int, list[str]] = {}
     for oid, _, coll in links:
         if coll:
             collections.setdefault(oid, []).append(coll)
-    for r in c.execute("SELECT id, creator, tags FROM mmf_items"):
+    for r in c.execute(f"SELECT i.id, i.creator, i.tags FROM mmf_items i WHERE {_MINE}", (owner,)):
         if r["id"] in new_ids:
             continue
         tags = json.loads(r["tags"] or "[]") + own.get(r["id"], [])
@@ -171,8 +184,8 @@ def _autotag(c, links: set) -> int:
         for coll in collections.get(r["id"], []):
             by_collection.setdefault(coll.casefold(), []).append(tags)
     local: dict[str, tuple[str, list[str]]] = {}
-    for r in c.execute("SELECT f.model_id, MAX(f.creator) creator, t.tag FROM model_tags t "
-                       "JOIN files f ON f.model_id = t.model_id AND f.hidden = 0 GROUP BY f.model_id, t.tag"):
+    for r in c.execute("SELECT f.model_id, MAX(f.creator) creator, t.tag FROM model_tags t JOIN files f "
+                       "ON f.model_id = t.model_id AND f.hidden = 0 AND f.owner = ? GROUP BY f.model_id, t.tag", (owner,)):
         local.setdefault(r["model_id"], (r["creator"], []))[1].append(r["tag"])
     for creator, tags in local.values():
         if creator:
@@ -191,18 +204,24 @@ def _autotag(c, links: set) -> int:
         have = {t.casefold() for t in site + own.get(r["id"], [])}
         add = [spelling.get(t, t) for t in autotag.guess(r["name"], site, " ".join(collections.get(r["id"], [])), genre, race)
                if t.casefold() not in have]
-        c.executemany("INSERT OR IGNORE INTO mmf_item_tags(item_id, tag) VALUES (?,?)", [(r["id"], t) for t in add])
+        c.executemany("INSERT OR IGNORE INTO mmf_item_tags(owner, item_id, tag) VALUES (?,?,?)",
+                      [(owner, r["id"], t) for t in add])
         tagged += bool(add)
-    c.executemany("INSERT OR IGNORE INTO mmf_autotagged(item_id) VALUES (?)", [(i,) for i in new_ids])
+    c.executemany("INSERT OR IGNORE INTO mmf_autotagged(owner, item_id) VALUES (?,?)", [(owner, i) for i in new_ids])
     return tagged
 
 
-def clear():
+def clear(owner: int, forget: bool = False):
+    """Empty one user's MyMiniFactory list. Their tags on the items are kept for a later sync,
+    unless `forget` (their account is being removed)."""
     c = db.conn()
     with c:
-        c.execute("DELETE FROM mmf_links")
-        c.execute("DELETE FROM mmf_items")
-        c.execute("DELETE FROM settings WHERE key='mmf_synced'")
+        c.execute("DELETE FROM mmf_links WHERE owner=?", (owner,))
+        c.execute("DELETE FROM mmf_items WHERE id NOT IN (SELECT item_id FROM mmf_links)")
+        c.execute("DELETE FROM settings WHERE key=?", (_synced_key(owner),))
+        if forget:
+            c.execute("DELETE FROM mmf_item_tags WHERE owner=?", (owner,))
+            c.execute("DELETE FROM mmf_autotagged WHERE owner=?", (owner,))
 
 
 # ---------------------------------------------------------------- matching to the local library
@@ -282,15 +301,15 @@ def rename_creator(old: str, new: str) -> str:
 class _Index:
     """Local releases and models by word, to match MyMiniFactory titles against."""
 
-    def __init__(self):
+    def __init__(self, owner: int):
         self.entries = []  # (tokens, creator tokens, creator key, release, model_id or None)
         self.by_word: dict[str, list[int]] = {}
         seen_releases = set()
         # Creators renamed in the app count as one ("Lord of the Print" shown as "Rescale Miniatures").
-        # Only the main admin's models: the MyMiniFactory library is theirs.
+        # Only the owner's own models: what they have uploaded themselves.
         self.names = creator_names()
         for r in db.conn().execute("SELECT release, model, MAX(creator) creator, MIN(model_id) model_id "
-                                   "FROM files WHERE hidden=0 AND owner=? GROUP BY release, model", (db.MAIN_ADMIN,)):
+                                   "FROM files WHERE hidden=0 AND owner=? GROUP BY release, model", (owner,)):
             creator = _tokens(r["creator"] or "")
             ckey = creator_key(display_creator(r["creator"] or "", self.names))
             if r["release"] not in seen_releases:
@@ -338,38 +357,42 @@ class _Index:
         return best
 
 
-_index_cache: tuple = (None, None)
+_index_cache: dict[int, tuple] = {}  # owner -> (signature of the files, _Index)
 
 
-def _local_index() -> _Index:
-    """Built once per change of the indexed files (and corrections), not per request."""
-    global _index_cache
-    sig = tuple(db.conn().execute(
+def _files_sig() -> tuple:
+    return tuple(db.conn().execute(
         "SELECT COUNT(*), MAX(id), TOTAL(length(release) + length(model) + length(creator) + hidden + owner) FROM files"
     ).fetchone()) + (tuple(sorted(creator_names().items())),)
-    if _index_cache[0] != sig:
-        _index_cache = (sig, _Index())
-    return _index_cache[1]
+
+
+def _local_index(owner: int) -> _Index:
+    """Built once per change of the indexed files (and corrections), not per request."""
+    sig = _files_sig()
+    if _index_cache.get(owner, (None,))[0] != sig:
+        _index_cache[owner] = (sig, _Index(owner))
+    return _index_cache[owner][1]
 
 
 def _match(name: str, creator: str, index: _Index):
     return index.match(name, creator)
 
 
-def _search(q: str) -> tuple[str, list]:
-    where, args = [], []
+def _search(q: str, owner: int) -> tuple[str, list]:
+    where, args = [_MINE], [owner]
     for word in q.split():
         if word.lower().startswith("tag:") and len(word) > 4:  # exact tag search
             where.append("(EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ? COLLATE NOCASE) "
-                         "OR i.id IN (SELECT item_id FROM mmf_item_tags WHERE tag = ? COLLATE NOCASE))")
-            args += [word[4:]] * 2
+                         "OR i.id IN (SELECT item_id FROM mmf_item_tags WHERE tag = ? COLLATE NOCASE AND owner = ?))")
+            args += [word[4:], word[4:], owner]
             continue
         where.append("(i.name LIKE ? OR i.creator LIKE ? OR i.id IN "
-                     "(SELECT item_id FROM mmf_links WHERE collection LIKE ?) "
+                     "(SELECT item_id FROM mmf_links WHERE collection LIKE ? AND owner = ?) "
                      "OR EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value LIKE ?) "
-                     "OR i.id IN (SELECT item_id FROM mmf_item_tags WHERE tag LIKE ?))")
-        args += [f"%{word}%"] * 5
-    return ("WHERE " + " AND ".join(where) if where else ""), args
+                     "OR i.id IN (SELECT item_id FROM mmf_item_tags WHERE tag LIKE ? AND owner = ?))")
+        w = f"%{word}%"
+        args += [w, w, w, owner, w, w, owner]
+    return "WHERE " + " AND ".join(where), args
 
 
 def _release_of(d: dict) -> str:
@@ -377,24 +400,25 @@ def _release_of(d: dict) -> str:
     return next((s["collection"] for s in d["sources"] if s["collection"]), "") or d["name"]
 
 
-def _matched_items(q: str = "", creator: str | None = None) -> list[dict]:
-    """Items with their sources, their matching local release or model (local) and their release."""
+def _matched_items(owner: int, q: str = "", creator: str | None = None) -> list[dict]:
+    """The owner's items with their sources, their matching release or model of the owner's (local)
+    and their release."""
     c = db.conn()
-    where, args = _search(q)
+    where, args = _search(q, owner)
     rows = c.execute(f"""SELECT i.* FROM mmf_items i {where}
                          ORDER BY i.creator COLLATE NOCASE, i.name COLLATE NOCASE""", args).fetchall()
     names = creator_names()
-    own = own_tags()
+    own = own_tags(owner)
     if creator is not None:
         key = creator_key(creator)
         rows = [r for r in rows if creator_key(display_creator(r["creator"], names)) == key]
     link_map: dict[int, list] = {}
-    for r in c.execute("SELECT * FROM mmf_links ORDER BY source, collection"):
+    for r in c.execute("SELECT * FROM mmf_links WHERE owner=? ORDER BY source, collection", (owner,)):
         link_map.setdefault(r["item_id"], []).append({"source": r["source"], "collection": r["collection"]})
-    index = _local_index()
+    index = _local_index(owner)
     out = []
     for r in rows:
-        d = _item(r, names, own)
+        d = _item(r, owner, names, own)
         d["sources"] = link_map.get(r["id"], [])
         d["local"] = _match(r["name"], d["creator"], index)
         d["release"] = _release_of(d)
@@ -402,11 +426,11 @@ def _matched_items(q: str = "", creator: str | None = None) -> list[dict]:
     return out
 
 
-def items(q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
+def items(owner: int, q: str = "", missing: bool = False, offset: int = 0, limit: int = 200,
           creator: str | None = None, release: str | None = None) -> dict:
     """creator: only items by this creator (compared with creator_key; '' = items without one).
     release: only items of this MyMiniFactory release that aren't in the local library."""
-    out = _matched_items(q, creator)
+    out = _matched_items(owner, q, creator)
     if missing or release is not None:
         out = [d for d in out if not d["local"]]
     if release is not None:
@@ -420,12 +444,12 @@ def newest_first(items: list[dict]) -> list[dict]:
                   key=lambda d: d["published"] if d["published"][:1].isdigit() else "", reverse=True)
 
 
-def grid_items(q: str = "", creator: str | None = None, release: str | None = None, source: str = "",
+def grid_items(owner: int, q: str = "", creator: str | None = None, release: str | None = None, source: str = "",
                tags: list[str] = ()) -> list[dict]:
     """Items for the main grid, shown like local models. source '' or 'missing': items not in the
     library; 'mmf': all of them, the ones in the library under their local release (grid_release)."""
     out = []
-    for d in _matched_items(q, creator):
+    for d in _matched_items(owner, q, creator):
         if d["local"] and source != "mmf":
             continue
         d["grid_release"] = d["local"]["release"] if d["local"] else d["release"]
@@ -438,10 +462,10 @@ def grid_items(q: str = "", creator: str | None = None, release: str | None = No
     return out
 
 
-def releases(q: str = "", creator: str | None = None, source: str = "", tags: list[str] = ()) -> dict[str, dict]:
+def releases(owner: int, q: str = "", creator: str | None = None, source: str = "", tags: list[str] = ()) -> dict[str, dict]:
     """casefolded release -> {"release", "creator", "mmf": count} of the grid items (see grid_items)."""
     groups: dict[str, dict] = {}
-    for d in grid_items(q, creator, None, source, tags):
+    for d in grid_items(owner, q, creator, None, source, tags):
         g = groups.setdefault(d["grid_release"].casefold(), {"release": d["grid_release"], "creators": {}, "mmf": 0})
         g["mmf"] += 1
         if d["creator"]:
@@ -450,35 +474,37 @@ def releases(q: str = "", creator: str | None = None, source: str = "", tags: li
                 "mmf": g["mmf"]} for k, g in groups.items()}
 
 
-def own_tags(ids: list[int] | None = None) -> dict[int, list[str]]:
-    """item id -> the tags added to it in the app."""
+def own_tags(owner: int, ids: list[int] | None = None) -> dict[int, list[str]]:
+    """item id -> the tags the owner added to it in the app."""
     out: dict[int, list[str]] = {}
-    sql = "SELECT item_id, tag FROM mmf_item_tags"
+    sql = "SELECT item_id, tag FROM mmf_item_tags WHERE owner = ?"
     if ids is not None:
-        sql += f" WHERE item_id IN ({','.join('?' * len(ids))})"
-    for r in db.conn().execute(sql + " ORDER BY tag COLLATE NOCASE", ids or []):
+        sql += f" AND item_id IN ({','.join('?' * len(ids))})"
+    for r in db.conn().execute(sql + " ORDER BY tag COLLATE NOCASE", [owner, *(ids or [])]):
         out.setdefault(r["item_id"], []).append(r["tag"])
     return out
 
 
-def set_tags(ids: list[int], add: list[str], remove: list[str]) -> int:
-    """Add and remove the app's own tags on items; returns how many items exist. A tag the item
-    already has from MyMiniFactory isn't added again."""
+def set_tags(owner: int, ids: list[int], add: list[str], remove: list[str]) -> int:
+    """Add and remove the owner's own tags on items of their library; returns how many of `ids`
+    are in it. A tag the item already has from MyMiniFactory isn't added again."""
     c = db.conn()
     site = {r["id"]: {t.casefold() for t in json.loads(r["tags"] or "[]")} for r in c.execute(
-        f"SELECT id, tags FROM mmf_items WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
+        f"SELECT i.id, i.tags FROM mmf_items i WHERE {_MINE} AND i.id IN ({','.join('?' * len(ids))})",
+        (owner, *ids))} if ids else {}
     with c:
         for oid in site:
             for t in remove:
-                c.execute("DELETE FROM mmf_item_tags WHERE item_id=? AND tag=? COLLATE NOCASE", (oid, t))
+                c.execute("DELETE FROM mmf_item_tags WHERE owner=? AND item_id=? AND tag=? COLLATE NOCASE", (owner, oid, t))
             for t in add:
                 if t.casefold() not in site[oid] and not c.execute(
-                        "SELECT 1 FROM mmf_item_tags WHERE item_id=? AND tag=? COLLATE NOCASE", (oid, t)).fetchone():
-                    c.execute("INSERT INTO mmf_item_tags(item_id, tag) VALUES (?,?)", (oid, t))
+                        "SELECT 1 FROM mmf_item_tags WHERE owner=? AND item_id=? AND tag=? COLLATE NOCASE",
+                        (owner, oid, t)).fetchone():
+                    c.execute("INSERT INTO mmf_item_tags(owner, item_id, tag) VALUES (?,?,?)", (owner, oid, t))
     return len(site)
 
 
-def _item(r, names: dict[str, str] | None = None, own: dict[int, list[str]] | None = None) -> dict:
+def _item(r, owner: int, names: dict[str, str] | None = None, own: dict[int, list[str]] | None = None) -> dict:
     d = dict(r)
     d["creator"] = display_creator(d["creator"], creator_names() if names is None else names)
     gallery = json.loads(d.pop("gallery", "") or "[]")
@@ -486,7 +512,7 @@ def _item(r, names: dict[str, str] | None = None, own: dict[int, list[str]] | No
     d["downloads"] = len(json.loads(d.get("downloads") or "[]"))
     d["queued"] = bool(d.get("queued"))
     d["mmf_tags"] = json.loads(d.pop("tags", "") or "[]")  # from MyMiniFactory
-    d["tags"] = (own_tags([d["id"]]) if own is None else own).get(d["id"], [])  # added in the app
+    d["tags"] = (own_tags(owner, [d["id"]]) if own is None else own).get(d["id"], [])  # added in the app
     return d
 
 
@@ -494,29 +520,32 @@ _local_tags_cache: tuple = (None, {})
 
 
 def local_tags() -> dict[str, list[str]]:
-    """model_id -> tags of the MyMiniFactory items matched to that local model. Not stored on the
-    model: they follow the match, and stay out of the model's own (editable) tags."""
+    """model_id -> tags of the MyMiniFactory items matched to that local model (in its owner's
+    MyMiniFactory library). Not stored on the model: they follow the match, and stay out of the
+    model's own (editable) tags."""
     global _local_tags_cache
-    _local_index()
-    sig = (_index_cache[0],) + tuple(db.conn().execute(
-        "SELECT COUNT(*), MAX(updated), TOTAL(length(tags)) FROM mmf_items").fetchone())
+    c = db.conn()
+    sig = _files_sig() + tuple(c.execute(
+        "SELECT COUNT(*), MAX(updated), TOTAL(length(tags)) FROM mmf_items").fetchone()) + tuple(c.execute(
+        "SELECT COUNT(*), TOTAL(owner * item_id) FROM mmf_links").fetchone())
     if _local_tags_cache[0] != sig:
         out: dict[str, list[str]] = {}
-        for d in _matched_items():
-            mid = (d["local"] or {}).get("model_id")
-            if mid and d["mmf_tags"]:
-                have = out.setdefault(mid, [])
-                have += [t for t in d["mmf_tags"] if t.casefold() not in {x.casefold() for x in have}]
+        for (owner,) in c.execute("SELECT DISTINCT owner FROM mmf_links").fetchall():
+            for d in _matched_items(owner):
+                mid = (d["local"] or {}).get("model_id")
+                if mid and d["mmf_tags"]:
+                    have = out.setdefault(mid, [])
+                    have += [t for t in d["mmf_tags"] if t.casefold() not in {x.casefold() for x in have}]
         _local_tags_cache = (sig, out)
     return _local_tags_cache[1]
 
 
-def creators(q: str = "", tags: list[str] = ()) -> dict[str, dict]:
-    """creator_key -> {"creator": the most used spelling, "items": count} of the synced items."""
-    where, args = _search(q)
+def creators(owner: int, q: str = "", tags: list[str] = ()) -> dict[str, dict]:
+    """creator_key -> {"creator": the most used spelling, "items": count} of the owner's synced items."""
+    where, args = _search(q, owner)
     spellings: dict[str, dict[str, int]] = {}
     renamed = creator_names()
-    own = own_tags() if tags else {}
+    own = own_tags(owner) if tags else {}
     for r in db.conn().execute(f"SELECT i.id, i.creator, i.tags FROM mmf_items i {where}", args):
         if tags and not has_tags(json.loads(r["tags"] or "[]") + own.get(r["id"], []), tags):
             continue
@@ -526,22 +555,24 @@ def creators(q: str = "", tags: list[str] = ()) -> dict[str, dict]:
     return {k: {"creator": max(v, key=v.get), "items": sum(v.values())} for k, v in spellings.items()}
 
 
-def item(oid: int) -> dict | None:
+def item(owner: int, oid: int) -> dict | None:
+    """An item of the owner's library, else None."""
     c = db.conn()
-    r = c.execute("SELECT * FROM mmf_items WHERE id=?", (oid,)).fetchone()
+    r = c.execute(f"SELECT * FROM mmf_items i WHERE i.id=? AND {_MINE}", (oid, owner)).fetchone()
     if not r:
         return None
-    d = _item(r)
+    d = _item(r, owner)
     d["sources"] = [dict(x) for x in c.execute(
-        "SELECT source, collection FROM mmf_links WHERE item_id=? ORDER BY source, collection", (oid,))]
-    d["local"] = _match(r["name"], d["creator"], _local_index())
+        "SELECT source, collection FROM mmf_links WHERE item_id=? AND owner=? ORDER BY source, collection", (oid, owner))]
+    d["local"] = _match(r["name"], d["creator"], _local_index(owner))
     return d
 
 
-def set_queued(oid: int, queued: bool) -> bool:
+def set_queued(owner: int, oid: int, queued: bool) -> bool:
     c = db.conn()
     with c:
-        n = c.execute("UPDATE mmf_items SET queued=?, download_note='' WHERE id=?", (int(queued), oid)).rowcount
+        n = c.execute("UPDATE mmf_items SET queued=?, download_note='' WHERE id=? AND id IN "
+                      "(SELECT item_id FROM mmf_links WHERE owner=?)", (int(queued), oid, owner)).rowcount
     return bool(n)
 
 
@@ -552,11 +583,11 @@ def _folder_name(s: str) -> str:
     return _UNSAFE.sub("-", s).strip(" .-")[:120] or "MyMiniFactory"
 
 
-def queue() -> list[dict]:
+def queue(owner: int) -> list[dict]:
     """Items to download on the next bookmarklet run, with the library folder each goes to:
     Creator/Item (read as Creator / Release) or just Item when the creator is unknown."""
     out, names = [], creator_names()
-    for r in db.conn().execute("SELECT * FROM mmf_items WHERE queued=1 ORDER BY name COLLATE NOCASE"):
+    for r in db.conn().execute(f"SELECT * FROM mmf_items i WHERE queued=1 AND {_MINE} ORDER BY name COLLATE NOCASE", (owner,)):
         name = _folder_name(r["name"])
         creator = _folder_name(display_creator(r["creator"], names)) if r["creator"] else ""
         out.append({"id": r["id"], "name": r["name"], "url": r["url"],
@@ -565,13 +596,15 @@ def queue() -> list[dict]:
     return out
 
 
-def gallery_needed() -> list[dict]:
-    """Items whose MyMiniFactory data hasn't been read for its full-size images or published date yet."""
+def gallery_needed(owner: int) -> list[dict]:
+    """The owner's items whose MyMiniFactory data hasn't been read for its full-size images or
+    published date yet."""
     return [{"id": r["id"], "url": r["url"], "image": r["image"]} for r in db.conn().execute(
-        "SELECT id, url, image FROM mmf_items WHERE gallery='' OR published='' ORDER BY gallery != '', id")]
+        f"SELECT id, url, image FROM mmf_items i WHERE (gallery='' OR published='') AND {_MINE} "
+        "ORDER BY gallery != '', id", (owner,))]
 
 
-def set_galleries(entries: list) -> int:
+def set_galleries(owner: int, entries: list) -> int:
     """Store what the bookmarklet read from each item's data: [{"id", "images": [url, ...], "published"}].
     An item read without a date is marked so it isn't read again for one."""
     rows = []
@@ -587,26 +620,30 @@ def set_galleries(entries: list) -> int:
     c = db.conn()
     with c:
         c.executemany("UPDATE mmf_items SET gallery=?, published=CASE WHEN published GLOB '[0-9]*' "
-                      "THEN published ELSE ? END WHERE id=?", rows)
+                      "THEN published ELSE ? END WHERE id=? AND id IN (SELECT item_id FROM mmf_links WHERE owner=?)",
+                      [(*r, owner) for r in rows])
     return len(rows)
 
 
-def download_result(oid: int, ok: bool, note: str):
+def download_result(owner: int, oid: int, ok: bool, note: str):
     c = db.conn()
     with c:
-        c.execute("UPDATE mmf_items SET queued=?, download_note=? WHERE id=?", (0 if ok else 1, _text(note, 500), oid))
+        c.execute("UPDATE mmf_items SET queued=?, download_note=? WHERE id=? AND id IN "
+                  "(SELECT item_id FROM mmf_links WHERE owner=?)", (0 if ok else 1, _text(note, 500), oid, owner))
 
 
-def status() -> dict:
+def status(owner: int) -> dict:
+    """The owner's MyMiniFactory library: how many items, from where, and how many aren't in their library."""
     c = db.conn()
-    total = c.execute("SELECT COUNT(*) FROM mmf_items").fetchone()[0]
-    synced = c.execute("SELECT value FROM settings WHERE key='mmf_synced'").fetchone()
+    total = c.execute(f"SELECT COUNT(*) FROM mmf_items i WHERE {_MINE}", (owner,)).fetchone()[0]
+    synced = c.execute("SELECT value FROM settings WHERE key=?", (_synced_key(owner),)).fetchone()
     by_source = {r["source"]: r["n"] for r in c.execute(
-        "SELECT source, COUNT(DISTINCT item_id) n FROM mmf_links GROUP BY source")}
+        "SELECT source, COUNT(DISTINCT item_id) n FROM mmf_links WHERE owner=? GROUP BY source", (owner,))}
     missing = 0
     if total:
-        index = _local_index()
-        missing = sum(1 for r in c.execute("SELECT name, creator FROM mmf_items") if not _match(r["name"], r["creator"], index))
-    queued = c.execute("SELECT COUNT(*) FROM mmf_items WHERE queued=1").fetchone()[0]
+        index = _local_index(owner)
+        missing = sum(1 for r in c.execute(f"SELECT name, creator FROM mmf_items i WHERE {_MINE}", (owner,))
+                      if not _match(r["name"], r["creator"], index))
+    queued = c.execute(f"SELECT COUNT(*) FROM mmf_items i WHERE queued=1 AND {_MINE}", (owner,)).fetchone()[0]
     return {"total": total, "missing": missing, "sources": by_source, "queued": queued,
             "synced": float(synced[0]) if synced else None}

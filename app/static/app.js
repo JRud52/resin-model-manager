@@ -354,7 +354,6 @@ async function refresh() { loadCreators(); loadTags(); loadMmfSide(); await load
 const MMF_SOURCES = { purchase: "Purchased", pledge: "Pledge", tribe: "Tribe", group: "Group", mmfplus: "MMF+", free: "Free" };
 
 async function loadMmfSide() {
-  if (!state.me?.is_admin) return;  // the MyMiniFactory library is the admin's
   const s = await api("/api/mmf/status");
   state.mmf = s;
   const li = (src, label, n) => `<li data-src="${src}" class="${state.source === src ? "active" : ""}">

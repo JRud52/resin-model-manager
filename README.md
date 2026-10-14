@@ -11,7 +11,7 @@ groups them by **release** and **model**, separates **supported** and
 
 * **Accounts.** Everyone logs in with their own username and password. The
   first visit creates the admin account, which owns the library as it is, keeps
-  the Settings, the NAS folder copy and the MyMiniFactory sync, and adds the
+  the Settings and the NAS folder copy, and adds the
   other accounts under *your name ▾* → *Manage users…* (there is no open
   sign-up). Each person sees their own models and everyone's public ones; *All
   models* / *My models* at the top of the sidebar switches between the two.
@@ -138,7 +138,9 @@ groups them by **release** and **model**, separates **supported** and
   These choices are kept across re-indexing.
 * **3D view.** *Rotate in 3D* loads the STL in the browser with three.js (this
   needs internet access from the browser, not from the NAS).
-* **Your MyMiniFactory library.** MyMiniFactory has no API for a user's
+* **Your MyMiniFactory library.** Every account syncs its own MyMiniFactory
+  library, compared with the models that person uploaded, and only they see it
+  and its tags. MyMiniFactory has no API for a user's
   purchases, pledges or tribes, so *Sync* (next to MyMiniFactory in the sidebar)
   gives you a bookmark to drag to your bookmarks bar. Click it on
   myminifactory.com while logged in: it reads your library the way the site's

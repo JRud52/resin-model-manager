@@ -180,8 +180,37 @@ bob.put("/api/me", {"default_public": False})
 assert carol.models() == {}
 print("release creators and defaults ok")
 
-# Admin only: settings, MyMiniFactory, users, folder mappings, creator renames.
-for method, u, body in (("PUT", "/api/settings", {"preview_size": 256}), ("GET", "/api/mmf/status", None),
+# MyMiniFactory: everyone syncs their own account, matched against their own models.
+def sync(client, *items):
+    return client.post("/api/mmf/import", {"items": [{"id": i, "name": n, "creator": "Orc Smiths", "source": "purchase"}
+                                                     for i, n in items], "complete": ["purchase"]})
+
+
+admin_mmf = admin.get("/api/mmf/status")
+s = sync(bob, (900001, "Bob Pack"), (900002, "Dragon Hoard"))
+assert s["total"] == 2 and s["missing"] == 1, "Bob Pack is in bob's library, Dragon Hoard isn't"
+assert bob.get("/api/mmf/900001")["local"]["release"] == "Bob Pack"
+assert admin.get("/api/mmf/status") == admin_mmf, "the admin's MyMiniFactory list is their own"
+assert carol.get("/api/mmf/status")["total"] == 0
+assert carol.status_of("GET", "/api/mmf/900002") == 404, "nor can others open bob's items"
+bob.post("/api/mmf/900002/tags", {"add": ["bob's dragon"]})
+online = [m for m in bob.get("/api/models?source=missing")["items"] if m.get("mmf")]
+assert [m["id"] for m in online] == [900002] and "bob's dragon" in online[0]["tags"], online
+admin.put("/api/me/admin-mode", {"on": True})
+assert not any(m["id"] in (900001, 900002) for m in admin.get("/api/models?source=mmf&limit=1000")["items"] if m.get("mmf"))
+admin.put("/api/me/admin-mode", {"on": False})
+# The same item in two people's libraries: one copy, but their own tags and lists.
+assert sync(carol, (900002, "Dragon Hoard"))["missing"] == 1
+assert "bob's dragon" not in carol.get("/api/mmf/900002")["tags"], "bob's tags stay bob's"
+carol.post("/api/models/bulk", {"mmf_ids": [900001, 900002], "add_tags": ["carol's"]})
+assert "carol's" not in bob.get("/api/mmf/900002")["tags"] and "carol's" in carol.get("/api/mmf/900002")["tags"]
+sync(carol)
+assert carol.get("/api/mmf/status")["total"] == 0 and bob.get("/api/mmf/status")["total"] == 2, "carol's sync leaves bob's list alone"
+assert carol.status_of("GET", "/api/mmf/900002") == 404
+print("MyMiniFactory per person ok")
+
+# Admin only: settings, users, folder mappings, creator renames.
+for method, u, body in (("PUT", "/api/settings", {"preview_size": 256}),
                         ("GET", "/api/users", None), ("GET", "/api/maps", None), ("POST", "/api/import", None),
                         ("POST", "/api/creators/rename", {"creator": "Orc Smiths", "name": "X"}),
                         ("PUT", "/api/me/admin-mode", {"on": True})):
@@ -217,7 +246,9 @@ removed = admin.get("/api/users")["removed"]
 assert {"folder": BOB, "models": 3} in removed, removed
 # A new account with the same name starts with a folder of its own.
 admin.post("/api/users", {"username": "bob", "password": "bob-pass"})
-assert Client("bob", "bob-pass").models(scope="mine") == {}
+new_bob = Client("bob", "bob-pass")
+assert new_bob.models(scope="mine") == {}
+assert new_bob.get("/api/mmf/status")["total"] == 0, "nor the old bob's MyMiniFactory list"
 # Claiming: one model, then everything left.
 admin.post("/api/models/claim", {"model_ids": [left[("Bob Pack", "Orc")]["id"]]})
 orc = admin.models(scope="mine")[("Bob Pack", "Orc")]

@@ -124,8 +124,8 @@ CREATE TABLE IF NOT EXISTS path_maps (
     created REAL DEFAULT (strftime('%s','now'))
 );
 
--- The user's MyMiniFactory library (purchases, pledges, tribes), sent by the sync
--- bookmarklet from their logged-in browser. Only listed here; nothing is downloaded.
+-- The users' MyMiniFactory libraries (purchases, pledges, tribes), sent by the sync
+-- bookmarklet from their logged-in browser; whose they are is in mmf_links. Only listed here; nothing is downloaded.
 CREATE TABLE IF NOT EXISTS mmf_items (
     id INTEGER PRIMARY KEY,          -- MyMiniFactory object id
     name TEXT NOT NULL,
@@ -147,22 +147,26 @@ CREATE TABLE IF NOT EXISTS mmf_items (
 -- Tags added in the app to MyMiniFactory items (their own tags from the site are in mmf_items.tags).
 -- Kept when the item drops out of a sync, so they come back with it.
 CREATE TABLE IF NOT EXISTS mmf_item_tags (
+    owner INTEGER NOT NULL DEFAULT 1,  -- users.id: each user tags the items of their own library
     item_id INTEGER NOT NULL,
     tag TEXT NOT NULL COLLATE NOCASE,
-    PRIMARY KEY (item_id, tag)
+    PRIMARY KEY (owner, item_id, tag)
 );
 
 -- MyMiniFactory items that have had their best-guess tags (autotag.py), so a later sync
 -- doesn't add them again, even to a tag the user has since removed.
 CREATE TABLE IF NOT EXISTS mmf_autotagged (
-    item_id INTEGER PRIMARY KEY
+    owner INTEGER NOT NULL DEFAULT 1,
+    item_id INTEGER NOT NULL,
+    PRIMARY KEY (owner, item_id)
 );
 
 CREATE TABLE IF NOT EXISTS mmf_links (
+    owner INTEGER NOT NULL DEFAULT 1,  -- users.id whose MyMiniFactory library has the item
     item_id INTEGER NOT NULL,
     source TEXT NOT NULL,
     collection TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (item_id, source, collection)
+    PRIMARY KEY (owner, item_id, source, collection)
 );
 
 -- Models combined into one: every model of the release named in parts becomes an
@@ -285,8 +289,17 @@ def init():
     if not c.execute("SELECT 1 FROM settings WHERE key='mmf_gallery_v'").fetchone():
         c.execute("UPDATE mmf_items SET gallery=''")
         c.execute("INSERT INTO settings(key, value) VALUES('mmf_gallery_v', '2')")
+    # Before accounts the MyMiniFactory library was the main admin's alone; now each user has their own.
+    for table, cols in (("mmf_links", "item_id, source, collection"), ("mmf_item_tags", "item_id, tag"),
+                        ("mmf_autotagged", "item_id")):
+        if "owner" not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+            c.executescript(SCHEMA)
+            c.execute(f"INSERT INTO {table}(owner, {cols}) SELECT {MAIN_ADMIN}, {cols} FROM {table}_old")
+            c.execute(f"DROP TABLE {table}_old")
+    c.execute("UPDATE settings SET key = ? WHERE key = 'mmf_synced'", (f"mmf_synced:{MAIN_ADMIN}",))
     # Items synced before 0.13 were tagged by hand; only items new to a sync get best-guess tags.
     if not c.execute("SELECT 1 FROM settings WHERE key='mmf_autotag_v'").fetchone():
-        c.execute("INSERT OR IGNORE INTO mmf_autotagged(item_id) SELECT id FROM mmf_items")
+        c.execute("INSERT OR IGNORE INTO mmf_autotagged(owner, item_id) SELECT owner, item_id FROM mmf_links")
         c.execute("INSERT INTO settings(key, value) VALUES('mmf_autotag_v', '1')")
     c.commit()
