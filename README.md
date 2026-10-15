@@ -260,7 +260,10 @@ Authelia. An Authelia username that matches an existing account (ignoring
 case) signs in to that account, so name your Authelia user like the admin
 account you made to keep it. A username the app can't use (more than 32
 characters, or anything other than letters, digits, `.`, `-` and `_`) is
-refused with a message. Accounts made through Authelia have no password of
+refused with a message. If your Authelia username differs from your account's
+(or Authelia already made a second, empty account), an admin can tie them
+together under *Manage users…* → *Link Authelia user* on the account to keep,
+then remove the empty one. Accounts made through Authelia have no password of
 their own; an admin can set one under *Manage users…* if someone also needs
 the local login.
 

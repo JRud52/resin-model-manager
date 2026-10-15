@@ -198,7 +198,10 @@ def external_user(username: str, groups: set[str], admin_group: str, by: str) ->
     the app can't use."""
     username = check_username(username)
     admin = admin_group in groups if admin_group else None
-    row = db.conn().execute("SELECT id, is_admin FROM users WHERE username = ?", (username,)).fetchone()
+    c = db.conn()
+    # An account linked to this Authelia name wins over one that merely has it as its username.
+    row = (c.execute("SELECT id, is_admin FROM users WHERE external = ? COLLATE NOCASE", (username,)).fetchone()
+           or c.execute("SELECT id, is_admin FROM users WHERE username = ?", (username,)).fetchone())
     if not row:
         user_id = create_user(username, None, bool(admin))
         log.info("Made an account for %s, signed in by %s", username, by)
@@ -226,7 +229,8 @@ def set_admin_mode(token: str, on: bool):
 
 def users() -> list[dict]:
     return [{"id": r["id"], "username": r["username"], "is_admin": bool(r["is_admin"]),
-             "default_public": bool(r["default_public"]), "main_admin": r["id"] == db.MAIN_ADMIN}
+             "default_public": bool(r["default_public"]), "main_admin": r["id"] == db.MAIN_ADMIN,
+             "external": r["external"] or ""}
             for r in db.conn().execute("SELECT * FROM users ORDER BY id")]
 
 
@@ -245,8 +249,16 @@ def set_password(user_id: int, password: str, end_sessions: bool = True, keep: s
     c.commit()
 
 
-def update_user(user_id: int, is_admin: bool | None = None, default_public: bool | None = None):
+def update_user(user_id: int, is_admin: bool | None = None, default_public: bool | None = None,
+                external: str | None = None):
+    """external: the Authelia username that signs in to this account ('' to unlink)."""
     c = db.conn()
+    if external is not None:
+        external = check_username(external) if external.strip() else None
+        if external and c.execute("SELECT 1 FROM users WHERE external = ? COLLATE NOCASE AND id != ?",
+                                  (external, user_id)).fetchone():
+            raise ValueError(f"{external} already signs in to another account")
+        c.execute("UPDATE users SET external = ? WHERE id = ?", (external, user_id))
     if is_admin is not None:
         if user_id == db.MAIN_ADMIN and not is_admin:
             raise ValueError("The main admin stays an admin")

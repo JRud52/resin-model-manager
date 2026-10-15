@@ -1527,9 +1527,11 @@ async function loadUsers() {
   $("#removedTable").innerHTML = removed.map((r) => `<tr data-folder="${esc(r.folder)}"><td class="path">${esc(r.folder)}</td>
     <td>${r.models} model${r.models === 1 ? "" : "s"}</td><td><button data-claim>Claim all</button></td></tr>`).join("");
   $("#usersTable").innerHTML = `<tr><th>User</th><th>Models</th><th></th></tr>` + users.map((u) => `<tr data-user="${u.id}">
-    <td>${esc(u.username)}${u.is_admin ? ` <span class="badge">${u.main_admin ? "main admin" : "admin"}</span>` : ""}</td>
+    <td>${esc(u.username)}${u.is_admin ? ` <span class="badge">${u.main_admin ? "main admin" : "admin"}</span>` : ""}
+      ${u.external ? `<div class="muted small">Authelia: ${esc(u.external)}</div>` : ""}</td>
     <td>${u.models}</td>
     <td><button data-act="password">Set password</button>
+      <button data-act="external" title="Which Authelia user signs in to this account">${u.external ? "Change Authelia user" : "Link Authelia user"}</button>
       ${u.main_admin || u.id === state.me.id ? "" : `<button data-act="admin">${u.is_admin ? "Remove admin" : "Make admin"}</button>
       <button data-act="remove">Remove</button>`}</td></tr>`).join("");
   state.users = users;
@@ -1549,6 +1551,11 @@ $("#usersTable").addEventListener("click", async (e) => {
       if (!pw) return;
       await api(`/api/users/${u.id}`, { method: "PUT", body: JSON.stringify({ password: pw }) });
       alert(`Password changed for ${u.username}.`);
+    } else if (b.dataset.act === "external") {
+      const name = prompt(`Authelia username that signs in to ${u.username} (leave empty to unlink). ` +
+        "If signing in through Authelia already made a separate account with that name, remove it afterwards.", u.external || "");
+      if (name === null) return;
+      await api(`/api/users/${u.id}`, { method: "PUT", body: JSON.stringify({ external: name.trim() }) });
     } else if (b.dataset.act === "admin") {
       await api(`/api/users/${u.id}`, { method: "PUT", body: JSON.stringify({ is_admin: !u.is_admin }) });
     } else if (b.dataset.act === "remove") {

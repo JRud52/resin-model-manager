@@ -151,6 +151,35 @@ victim = Client()
 r = victim.open(callback)
 assert "login_error" in r.url and victim.me() == 401, "no session from a callback this browser didn't start"
 
+# An admin links an Authelia user to an existing account; it then signs in there, not to its namesake.
+admin = Client()
+admin.opener.open(urllib.request.Request(BASE + "/api/auth/login", method="POST", headers={"Content-Type": "application/json"},
+                                         data=json.dumps({"username": ADMIN, "password": PASSWORD}).encode()))
+main_id = admin.me()["id"]
+linked = f"{name}-link"
+assert Client().sign_in(linked) == ""  # Authelia made a separate account first, as happens before linking
+
+
+def put_user(uid, body):
+    req = urllib.request.Request(f"{BASE}/api/users/{uid}", method="PUT", headers={"Content-Type": "application/json"},
+                                 data=json.dumps(body).encode())
+    try:
+        return admin.opener.open(req).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+assert put_user(main_id, {"external": linked.upper()}) == 200
+users = json.loads(admin.open("/api/users").read())["users"]
+assert next(u for u in users if u["id"] == main_id)["external"] == linked.upper()
+other = next(u for u in users if u["username"] == linked)
+assert put_user(other["id"], {"external": linked}) == 400, "one Authelia user, one account"
+c4 = Client()
+assert c4.sign_in(linked) == "" and c4.me()["id"] == main_id, "the link wins over the account with that name"
+assert put_user(main_id, {"external": ""}) == 200
+c5 = Client()
+assert c5.sign_in(linked) == "" and c5.me()["id"] == other["id"], "unlinked: back to the namesake"
+
 # Local logins keep working alongside.
 local = Client()
 local.opener.open(urllib.request.Request(BASE + "/api/auth/login", method="POST", headers={"Content-Type": "application/json"},
