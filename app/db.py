@@ -200,6 +200,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin INTEGER NOT NULL DEFAULT 0,
     default_public INTEGER NOT NULL DEFAULT 0, -- their models without a visibility rule are public
     folder TEXT NOT NULL DEFAULT '',  -- where their uploads go (_users/<username>); '' for the main admin
+    external TEXT,                   -- Authelia (OIDC / forward auth) username that signs in here, if not the username
     created REAL DEFAULT (strftime('%s','now'))
 );
 
@@ -286,6 +287,9 @@ def init():
         folder = f"{config.USERS_FOLDER}/{r['username']}"
         c.execute("UPDATE users SET folder = ? WHERE id = ?", (folder, r["id"]))
         c.execute("INSERT OR IGNORE INTO folder_owners(folder, owner) VALUES (?, ?)", (folder, r["id"]))
+    if "external" not in {r["name"] for r in c.execute("PRAGMA table_info(users)")}:
+        c.execute("ALTER TABLE users ADD COLUMN external TEXT")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_external ON users(external COLLATE NOCASE)")
     if "proxy" not in {r["name"] for r in c.execute("PRAGMA table_info(sessions)")}:
         c.execute("ALTER TABLE sessions ADD COLUMN proxy INTEGER NOT NULL DEFAULT 0")
     if "creator" not in {r["name"] for r in c.execute("PRAGMA table_info(overrides)")}:

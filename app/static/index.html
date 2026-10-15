@@ -425,7 +425,9 @@
   <div class="dlg-head"><h2>Users</h2><div class="spacer"></div><button class="icon" data-close>✕</button></div>
   <p class="muted small">Everyone logs in with their own username and password. Each person sees their own models and
     everyone's public ones; uploads go into their own folder in the library (<code>_users/&lt;username&gt;</code>).
-    Admins can change anyone's models, keep the settings, and see everything in admin mode.</p>
+    Admins can change anyone's models, keep the settings, and see everything in admin mode.
+    Someone signing in with Authelia gets the account with the same username, or the one linked to their Authelia user
+    with <b>Link Authelia user</b>.</p>
   <table id="usersTable"></table>
   <div id="removedUsers" class="hidden">
     <h3>From removed accounts</h3>

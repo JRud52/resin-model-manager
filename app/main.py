@@ -1178,6 +1178,7 @@ class UserIn(BaseModel):
     username: str = ""
     password: Optional[str] = None
     is_admin: Optional[bool] = None
+    external: Optional[str] = None  # the Authelia username that signs in to this account; '' unlinks
 
 
 @app.get("/api/users")
@@ -1214,6 +1215,8 @@ def edit_user(user_id: int, body: UserIn, v: Admin):
             if user_id == v.id and not body.is_admin:
                 raise ValueError("You can't take away your own admin rights")
             auth.update_user(user_id, is_admin=body.is_admin)
+        if body.external is not None:
+            auth.update_user(user_id, external=body.external)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}
