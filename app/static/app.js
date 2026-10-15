@@ -1494,6 +1494,7 @@ $("#userBtn").onclick = () => {
   $("#acTitle").textContent = state.me.username;
   $("#acVisForm").default_public.value = state.me.default_public ? "1" : "0";
   $("#acPwForm").reset();
+  $("#acPwForm").classList.toggle("hidden", state.me.proxy || !state.me.has_password);  // Authelia accounts have none
   $("#acVisMsg").textContent = $("#acPwMsg").textContent = "";
   $("#accountDlg").showModal();
 };
@@ -1515,7 +1516,10 @@ $("#acPwForm").addEventListener("submit", async (e) => {
     $("#acPwMsg").textContent = "Password changed. Other devices were logged out.";
   } catch (err) { $("#acPwMsg").textContent = err.message; }
 });
-$("#logoutBtn").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); location.reload(); };
+$("#logoutBtn").onclick = async () => {
+  const r = await api("/api/auth/logout", { method: "POST" });
+  if (r.redirect) location.href = r.redirect; else location.reload();
+};
 
 async function loadUsers() {
   const { users, removed } = await api("/api/users");

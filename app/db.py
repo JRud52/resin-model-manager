@@ -215,6 +215,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,          -- sha256 of the cookie value
     user_id INTEGER NOT NULL,
     admin_mode INTEGER NOT NULL DEFAULT 0, -- an admin seeing everyone's models, private ones too
+    proxy INTEGER NOT NULL DEFAULT 0,  -- signed in through the reverse proxy (config.AUTH_PROXY)
     created REAL NOT NULL,
     seen REAL NOT NULL
 );
@@ -285,6 +286,8 @@ def init():
         folder = f"{config.USERS_FOLDER}/{r['username']}"
         c.execute("UPDATE users SET folder = ? WHERE id = ?", (folder, r["id"]))
         c.execute("INSERT OR IGNORE INTO folder_owners(folder, owner) VALUES (?, ?)", (folder, r["id"]))
+    if "proxy" not in {r["name"] for r in c.execute("PRAGMA table_info(sessions)")}:
+        c.execute("ALTER TABLE sessions ADD COLUMN proxy INTEGER NOT NULL DEFAULT 0")
     if "creator" not in {r["name"] for r in c.execute("PRAGMA table_info(overrides)")}:
         c.execute("ALTER TABLE overrides ADD COLUMN creator TEXT")
     mmf_cols = {r["name"] for r in c.execute("PRAGMA table_info(mmf_items)")}

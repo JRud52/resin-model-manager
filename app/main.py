@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+from html import escape
 import logging
 import mimetypes
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Annotated, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, archives, auth, classify, config, db, library, mmf, settings
+from . import __version__, archives, auth, classify, config, db, library, mmf, oidc, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 app = FastAPI(title="Resin Model Manager", version=__version__)
 STATIC = Path(__file__).parent / "static"
 
@@ -1028,18 +1031,23 @@ class LoginIn(BaseModel):
     password: str
 
 
-def _login_response(request: Request, token: str) -> JSONResponse:
-    resp = JSONResponse({"ok": True})
+def _set_session_cookie(resp: Response, request: Request, token: str):
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
                     secure=https)
+
+
+def _login_response(request: Request, token: str) -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    _set_session_cookie(resp, request, token)
     return resp
 
 
 @app.get("/api/auth/state")
 def auth_state(request: Request):
     v = getattr(request.state, "viewer", None)
-    return {"setup": auth.setup_needed(), "user": v.as_dict() if v else None}
+    return {"setup": auth.setup_needed(), "user": v.as_dict() if v else None,
+            "oidc": config.OIDC_NAME if oidc.enabled() else None}
 
 
 @app.post("/api/auth/setup")
@@ -1062,12 +1070,65 @@ def auth_login(body: LoginIn, request: Request):
     return _login_response(request, token)
 
 
+def _oidc_redirect_uri(request: Request) -> str:
+    if config.OIDC_REDIRECT_URL:
+        return config.OIDC_REDIRECT_URL
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host.split(',')[0].strip()}/api/auth/oidc/callback"
+
+
+def _login_error(msg: str) -> RedirectResponse:
+    return RedirectResponse("/?" + urllib.parse.urlencode({"login_error": msg}), status_code=303)
+
+
+@app.get("/api/auth/oidc/login")
+def oidc_login(request: Request):
+    """Starts "Sign in with Authelia": off to the provider, which comes back to oidc_callback."""
+    if not oidc.enabled():
+        raise HTTPException(404, "Signing in with OIDC isn't set up")
+    try:
+        url, state = oidc.start(_oidc_redirect_uri(request))
+    except OSError as e:
+        log.warning("Couldn't reach %s: %s", config.OIDC_ISSUER, e)
+        return _login_error(f"Couldn't reach {config.OIDC_NAME}; try again later")
+    resp = RedirectResponse(url, status_code=303)
+    https = _oidc_redirect_uri(request).startswith("https:")
+    resp.set_cookie(oidc.COOKIE, state, max_age=600, httponly=True, samesite="lax", secure=https)
+    return resp
+
+
+@app.get("/api/auth/oidc/callback")
+def oidc_callback(request: Request, code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    if not oidc.enabled():
+        raise HTTPException(404, "Signing in with OIDC isn't set up")
+    if error:
+        return _login_error(f"{config.OIDC_NAME}: {error_description or error}")
+    try:
+        username, groups, next_path = oidc.finish(code, state, request.cookies.get(oidc.COOKIE),
+                                                  _oidc_redirect_uri(request))
+        user_id = auth.external_user(username, groups, config.OIDC_ADMIN_GROUP, config.OIDC_NAME)
+    except ValueError as e:
+        return _login_error(str(e))
+    except OSError as e:
+        log.warning("Signing in with %s failed: %s", config.OIDC_ISSUER, e)
+        return _login_error(f"Couldn't reach {config.OIDC_NAME}; try again later")
+    resp = RedirectResponse(next_path if next_path.startswith("/") and not next_path.startswith("//") else "/",
+                            status_code=303)
+    _set_session_cookie(resp, request, auth.new_session(user_id))
+    resp.delete_cookie(oidc.COOKIE)
+    return resp
+
+
 @app.post("/api/auth/logout")
 def auth_logout(request: Request):
-    token = request.cookies.get(auth.COOKIE)
+    """`redirect`: where to go next, to log out of the reverse proxy too (else it signs you
+    straight back in)."""
+    v = request.state.viewer
+    token = request.state.token
     if token:
         auth.logout(token)
-    resp = JSONResponse({"ok": True})
+    resp = JSONResponse({"ok": True, "redirect": config.AUTH_PROXY_LOGOUT_URL if v and v.proxy else ""})
     resp.delete_cookie(auth.COOKIE)
     return resp
 
@@ -1091,7 +1152,7 @@ def update_me(body: MeIn, request: Request, v: Me):
         if not auth.check_password(body.current_password, row["password"]):
             raise HTTPException(400, "Your current password isn't right")
         try:
-            auth.set_password(v.id, body.password, keep=request.cookies.get(auth.COOKIE))
+            auth.set_password(v.id, body.password, keep=request.state.token)
         except ValueError as e:
             raise HTTPException(400, str(e))
     if body.default_public is not None:
@@ -1099,7 +1160,7 @@ def update_me(body: MeIn, request: Request, v: Me):
         library.clear_visibility(v.id)
         mmf.clear_visibility(v.id)
         library.reclassify()
-    return auth.viewer(request.cookies.get(auth.COOKIE)).as_dict()
+    return auth.viewer(request.state.token).as_dict()
 
 
 class AdminModeIn(BaseModel):
@@ -1109,8 +1170,8 @@ class AdminModeIn(BaseModel):
 @app.put("/api/me/admin-mode")
 def admin_mode(body: AdminModeIn, request: Request, v: Admin):
     """Admin mode: see everyone's models, private ones too (for this login)."""
-    auth.set_admin_mode(request.cookies.get(auth.COOKIE), body.on)
-    return auth.viewer(request.cookies.get(auth.COOKIE)).as_dict()
+    auth.set_admin_mode(request.state.token, body.on)
+    return auth.viewer(request.state.token).as_dict()
 
 
 class UserIn(BaseModel):
@@ -1212,15 +1273,53 @@ def index():
 _OPEN = ("/api/auth/", "/static/")
 
 
+_untrusted_logged: set[str] = set()
+
+
+def _proxy_user(request: Request) -> Optional[tuple[str, set[str]]]:
+    """(username, groups) sent by the reverse proxy, if it is on and trusted (config.AUTH_PROXY)."""
+    if not config.AUTH_PROXY:
+        return None
+    name = request.headers.get(config.AUTH_PROXY_USER_HEADER, "").strip()
+    if not name:
+        return None
+    host = request.client.host if request.client else ""
+    if not auth.trusted_proxy(host):
+        if host not in _untrusted_logged:  # once per address, so the log says what to trust
+            _untrusted_logged.add(host)
+            log.warning("Ignored the %s header from %s, which isn't in AUTH_PROXY_TRUSTED",
+                        config.AUTH_PROXY_USER_HEADER, host)
+        return None
+    groups = {g.strip() for g in request.headers.get(config.AUTH_PROXY_GROUPS_HEADER, "").split(",") if g.strip()}
+    return name, groups
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
-    request.state.viewer = auth.viewer(request.cookies.get(auth.COOKIE))
+    token = request.cookies.get(auth.COOKIE)
+    viewer, new_token = auth.viewer(token), None
     path = request.url.path
-    if request.state.viewer is None and not path.startswith(_OPEN) and path != "/api/status":
+    proxied = _proxy_user(request)
+    if proxied:
+        try:
+            viewer, new_token = auth.proxy_login(*proxied, token)
+        except ValueError as e:
+            msg = f"{proxied[0]} can't sign in to Resin Models: {e}."
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": msg}, status_code=403)
+            return HTMLResponse(f"<!doctype html><title>Resin Models</title><p>{escape(msg)}</p>", status_code=403)
+    elif viewer and viewer.proxy:
+        viewer = None  # signed in by the proxy: only good while the proxy still vouches for them
+    request.state.viewer = viewer
+    request.state.token = new_token or token
+    if viewer is None and not path.startswith(_OPEN) and path != "/api/status":
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Log in first"}, status_code=401)
         return _page("login.html")
-    return await call_next(request)
+    response = await call_next(request)
+    if new_token:
+        _set_session_cookie(response, request, new_token)
+    return response
 
 
 @app.middleware("http")
