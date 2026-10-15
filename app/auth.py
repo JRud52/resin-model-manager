@@ -74,6 +74,7 @@ class Viewer:
     default_public: bool
     folder: str  # where their uploads go; '' = the library itself (the main admin)
     proxy: bool = False  # signed in through the reverse proxy, which also handles logging out
+    has_password: bool = True  # False for accounts made by the reverse proxy or OIDC
 
     @property
     def sees_all(self) -> bool:
@@ -85,7 +86,8 @@ class Viewer:
     def as_dict(self) -> dict:
         return {"id": self.id, "username": self.username, "is_admin": self.is_admin,
                 "admin_mode": self.sees_all, "default_public": self.default_public, "folder": self.folder,
-                "main_admin": self.id == db.MAIN_ADMIN, "proxy": self.proxy}
+                "main_admin": self.id == db.MAIN_ADMIN, "proxy": self.proxy,
+                "has_password": self.has_password}
 
 
 def setup_needed() -> bool:
@@ -142,7 +144,7 @@ def viewer(token: str | None) -> Viewer | None:
     if not token:
         return None
     c = db.conn()
-    row = c.execute("""SELECT u.id, u.username, u.is_admin, u.default_public, u.folder, s.admin_mode, s.proxy, s.seen
+    row = c.execute("""SELECT u.id, u.username, u.is_admin, u.default_public, u.folder, u.password, s.admin_mode, s.proxy, s.seen
                        FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?""",
                     (_token_key(token),)).fetchone()
     if not row or row["seen"] < time.time() - SESSION_DAYS * 86400:
@@ -151,7 +153,7 @@ def viewer(token: str | None) -> Viewer | None:
         c.execute("UPDATE sessions SET seen = ? WHERE token = ?", (time.time(), _token_key(token)))
         c.commit()
     return Viewer(row["id"], row["username"], bool(row["is_admin"]), bool(row["admin_mode"]),
-                  bool(row["default_public"]), row["folder"], bool(row["proxy"]))
+                  bool(row["default_public"]), row["folder"], bool(row["proxy"]), row["password"] != NO_PASSWORD)
 
 
 # ---------------------------------------------------------------- reverse proxy sign-in
@@ -190,21 +192,26 @@ def trusted_proxy(ip: str) -> bool:
     return False
 
 
-def proxy_login(username: str, groups: set[str], token: str | None) -> tuple[Viewer, str | None]:
-    """The user the reverse proxy vouches for, with their account made on their first visit and
-    admin rights following config.AUTH_PROXY_ADMIN_GROUP. Returns their viewer and, when the
-    session in `token` isn't theirs, the token of a new one."""
+def external_user(username: str, groups: set[str], admin_group: str, by: str) -> int:
+    """The account of someone signed in elsewhere (the reverse proxy, OIDC), made on their first
+    visit; with `admin_group` set, admin rights follow membership. ValueError for a username
+    the app can't use."""
     username = check_username(username)
-    c = db.conn()
-    admin = config.AUTH_PROXY_ADMIN_GROUP in groups if config.AUTH_PROXY_ADMIN_GROUP else None
-    row = c.execute("SELECT id, is_admin FROM users WHERE username = ?", (username,)).fetchone()
+    admin = admin_group in groups if admin_group else None
+    row = db.conn().execute("SELECT id, is_admin FROM users WHERE username = ?", (username,)).fetchone()
     if not row:
         user_id = create_user(username, None, bool(admin))
-        log.info("Made an account for %s, signed in by the reverse proxy", username)
-    else:
-        user_id = row["id"]
-        if admin is not None and admin != bool(row["is_admin"]) and user_id != db.MAIN_ADMIN:
-            update_user(user_id, is_admin=admin)
+        log.info("Made an account for %s, signed in by %s", username, by)
+        return user_id
+    if admin is not None and admin != bool(row["is_admin"]) and row["id"] != db.MAIN_ADMIN:
+        update_user(row["id"], is_admin=admin)
+    return row["id"]
+
+
+def proxy_login(username: str, groups: set[str], token: str | None) -> tuple[Viewer, str | None]:
+    """The user the reverse proxy vouches for (external_user). Returns their viewer and, when
+    the session in `token` isn't theirs, the token of a new one."""
+    user_id = external_user(username, groups, config.AUTH_PROXY_ADMIN_GROUP, "the reverse proxy")
     v = viewer(token)
     if v and v.id == user_id:
         return v, None

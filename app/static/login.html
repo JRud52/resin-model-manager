@@ -15,12 +15,26 @@
   <label id="againRow" class="hidden">Password again <input name="again" type="password" autocomplete="new-password"></label>
   <p id="loginErr" class="small err"></p>
   <button id="loginBtn" class="primary">Log in</button>
+  <p id="oidcOr" class="muted small hidden" style="text-align:center;margin:0">or</p>
+  <button id="oidcBtn" type="button" class="hidden"></button>
 </form>
 <script>
 const form = document.getElementById("loginForm");
 let setup = false;
+const loginError = new URLSearchParams(location.search).get("login_error");
+if (loginError) {
+  document.getElementById("loginErr").textContent = loginError;
+  history.replaceState(null, "", "/");
+}
 fetch("/api/auth/state").then((r) => r.json()).then((s) => {
   setup = s.setup;
+  if (s.oidc) {  // "Sign in with Authelia" (OpenID Connect)
+    const b = document.getElementById("oidcBtn");
+    b.textContent = `Sign in with ${s.oidc}`;
+    b.onclick = () => { location.href = "/api/auth/oidc/login"; };
+    b.classList.remove("hidden");
+    document.getElementById("oidcOr").classList.remove("hidden");
+  }
   if (!setup) return;
   document.getElementById("setupNote").classList.remove("hidden");
   document.getElementById("againRow").classList.remove("hidden");

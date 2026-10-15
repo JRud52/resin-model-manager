@@ -54,3 +54,17 @@ AUTH_PROXY_GROUPS_HEADER = os.environ.get("AUTH_PROXY_GROUPS_HEADER", "Remote-Gr
 AUTH_PROXY_ADMIN_GROUP = os.environ.get("AUTH_PROXY_ADMIN_GROUP", "").strip()
 # Where Log out goes for people signed in through the proxy (e.g. https://auth.example.com/logout).
 AUTH_PROXY_LOGOUT_URL = os.environ.get("AUTH_PROXY_LOGOUT_URL", "").strip()
+
+# "Sign in with Authelia" on the login page, through OpenID Connect (see oidc.py). On when the
+# issuer, client id and secret are all set.
+OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "").strip()  # e.g. https://auth.example.com
+OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID", "").strip()
+OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
+OIDC_NAME = os.environ.get("OIDC_NAME", "Authelia").strip() or "Authelia"  # the button's label
+OIDC_SCOPES = os.environ.get("OIDC_SCOPES", "openid profile email groups").strip()
+OIDC_USERNAME_CLAIM = os.environ.get("OIDC_USERNAME_CLAIM", "preferred_username").strip()
+# Members of this group are admins (and others aren't); empty leaves admin rights to the app.
+OIDC_ADMIN_GROUP = os.environ.get("OIDC_ADMIN_GROUP", "").strip()
+# The callback address registered with the provider; worked out from the request when empty
+# (https://<host>/api/auth/oidc/callback behind an HTTPS proxy).
+OIDC_REDIRECT_URL = os.environ.get("OIDC_REDIRECT_URL", "").strip()

@@ -29,7 +29,7 @@ groups them by **release** and **model**, separates **supported** and
   account with the same name gets a fresh folder and doesn't see them. A forgotten password is
   reset by an admin, or for the admin itself with
   `docker exec -it resin-models python -m app.auth reset-password <username>`.
-  With Authelia in front of the app, people can sign in through it instead, see
+  With Authelia, people can also sign in with their Authelia account, see
   [Signing in with Authelia](#signing-in-with-authelia).
 * **Import files from the browser.** Click *Import files*, or drop files,
   folders or `.zip` / `.7z` archives anywhere on the page. They are uploaded
@@ -211,7 +211,8 @@ login.
 | `PUID` / `PGID` | `1000` | Your NAS user (`id -u`, `id -g`), so copied files belong to you. |
 | `PORT` | `8417` | Port on the NAS. |
 | `SOURCE_PATH` | *(none)* | Optional. An existing library on the NAS, mounted read-only so the Import dialog can copy it in. Leave it out to start from an empty library. |
-| `AUTH_PROXY`, `AUTH_PROXY_TRUSTED`, `AUTH_PROXY_ADMIN_GROUP`, `AUTH_PROXY_LOGOUT_URL` | *(off)* | Optional sign-in through Authelia, see below. |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_ADMIN_GROUP` | *(off)* | Optional *Sign in with Authelia* button, see below. |
+| `AUTH_PROXY`, `AUTH_PROXY_TRUSTED`, `AUTH_PROXY_ADMIN_GROUP`, `AUTH_PROXY_LOGOUT_URL` | *(off)* | Optional sign-in by Authelia's forward auth, see below. |
 
 ### With Portainer (auto-updates from Git)
 
@@ -244,6 +245,74 @@ from a checkout.
 
 ### Signing in with Authelia
 
+There are two ways, and either works next to the app's own usernames and
+passwords:
+
+* **A *Sign in with Authelia* button** (OpenID Connect) on the app's login page.
+  People with an Authelia account use it, everyone else logs in as before.
+  Pick this one to keep both kinds of account.
+* **Forward auth**: Authelia stands in front of the whole app and the app takes
+  whoever Authelia signed in, so nobody sees the app's login page. Only people
+  with an Authelia account get in.
+
+Either way the app makes an account the first time someone signs in through
+Authelia. An Authelia username that matches an existing account (ignoring
+case) signs in to that account, so name your Authelia user like the admin
+account you made to keep it. A username the app can't use (more than 32
+characters, or anything other than letters, digits, `.`, `-` and `_`) is
+refused with a message. Accounts made through Authelia have no password of
+their own; an admin can set one under *Manage users…* if someone also needs
+the local login.
+
+#### Sign in with Authelia button (OpenID Connect)
+
+Register the app as a client in Authelia's `configuration.yml` (Authelia 4.38
+or later; make the secret's digest with
+`authelia crypto hash generate pbkdf2 --random`):
+
+```yaml
+identity_providers:
+  oidc:
+    authorization_policies:
+      models:
+        default_policy: deny
+        rules:
+          - policy: two_factor
+            subject: ['group:admins', 'group:friends']
+    clients:
+      - client_id: models
+        client_name: Resin Models
+        client_secret: '$pbkdf2-sha512$...'  # the digest; the app gets the plain secret
+        public: false
+        authorization_policy: models
+        redirect_uris:
+          - https://models.example.com/api/auth/oidc/callback
+        scopes: [openid, profile, email, groups]
+        grant_types: [authorization_code]
+        response_types: [code]
+        require_pkce: true
+        pkce_challenge_method: S256
+        token_endpoint_auth_method: client_secret_basic
+```
+
+Then set these for the app:
+
+| Variable | Example | Meaning |
+| --- | --- | --- |
+| `OIDC_ISSUER` | `https://auth.example.com` | Authelia's address. |
+| `OIDC_CLIENT_ID` | `models` | The client above. |
+| `OIDC_CLIENT_SECRET` | | The plain secret whose digest is in Authelia's config. |
+| `OIDC_ADMIN_GROUP` | `admins` | Optional. Members of this Authelia group are admins in the app and others aren't, checked each time they sign in through Authelia. The main admin always stays an admin. |
+| `OIDC_NAME` | `Authelia` | Optional. The button says *Sign in with* this. |
+| `OIDC_REDIRECT_URL` | | Optional. The callback address, when it can't be worked out from the request (it is `https://<host>/api/auth/oidc/callback` behind a proxy that sends `X-Forwarded-Proto`, which Traefik does). |
+
+Don't put Authelia's forward-auth middleware on the app's route for this one,
+or nobody would reach the login page without Authelia first. The app needs to
+reach `OIDC_ISSUER` itself. Logging out of the app leaves you signed in to
+Authelia, so the button signs you straight back in until you log out there.
+
+#### Forward auth
+
 If the app sits behind a reverse proxy protected by
 [Authelia](https://www.authelia.com/) (forward auth), it can take the user
 Authelia signed in instead of asking for its own password. Authelia passes the
@@ -251,7 +320,7 @@ username to the app in the `Remote-User` header and the groups in
 `Remote-Groups`; the app makes an account the first time someone comes and
 signs them in from then on.
 
-Add these to the stack's environment variables in Portainer (or `.env`):
+Set these for the app:
 
 | Variable | Example | Meaning |
 | --- | --- | --- |
@@ -260,13 +329,7 @@ Add these to the stack's environment variables in Portainer (or `.env`):
 | `AUTH_PROXY_ADMIN_GROUP` | `admins` | Optional. Members of this Authelia group are admins in the app and everyone else isn't, checked on every visit. Leave it out to manage admins in the app under *Manage users…*. The main admin always stays an admin. |
 | `AUTH_PROXY_LOGOUT_URL` | `https://auth.example.com/logout` | Optional. Where *Log out* goes, so it logs out of Authelia too; without it, Authelia signs you straight back in. Add `?rd=https://models.example.com/` to come back afterwards. |
 
-An Authelia username that matches an existing account (ignoring case) signs in
-to that account, so name your Authelia user like the admin account you made to
-keep it. A username the app can't use (more than 32 characters, or anything
-other than letters, digits, `.`, `-` and `_`) is refused with a message. Accounts made through Authelia
-have no password of their own; an admin can set one under *Manage users…* if
-someone also needs the local login, which keeps working for everyone. A
-session started by Authelia ends as soon as a request comes without its header,
+A session started by forward auth ends as soon as a request comes without its header,
 so going around the proxy doesn't keep someone signed in.
 
 Only trust the proxy itself. Anyone who can reach the app directly from a
@@ -357,6 +420,9 @@ python tests/users_test.py http://localhost:8417  # accounts, public / private, 
 # signing in through Authelia: start the server with AUTH_PROXY=1 AUTH_PROXY_TRUSTED=127.0.0.1
 # AUTH_PROXY_ADMIN_GROUP=admins AUTH_PROXY_LOGOUT_URL=https://auth.example.com/logout, then
 python tests/proxy_auth_test.py http://localhost:8417
+# the Sign in with Authelia button against a fake provider the test runs: start the server with
+# OIDC_ISSUER=http://127.0.0.1:8419 OIDC_CLIENT_ID=models OIDC_CLIENT_SECRET=s3cret OIDC_ADMIN_GROUP=admins, then
+python tests/oidc_test.py http://localhost:8417
 pip install playwright && python tests/mmf_test.py http://localhost:8417  # MyMiniFactory sync on a fake site
 ```
 

@@ -19,6 +19,11 @@ services:
       AUTH_PROXY_TRUSTED: ${AUTH_PROXY_TRUSTED:-}
       AUTH_PROXY_ADMIN_GROUP: ${AUTH_PROXY_ADMIN_GROUP:-}
       AUTH_PROXY_LOGOUT_URL: ${AUTH_PROXY_LOGOUT_URL:-}
+      # Optional "Sign in with Authelia" button (OpenID Connect); see the README.
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_ADMIN_GROUP: ${OIDC_ADMIN_GROUP:-}
     volumes:
       # Create both folders first, owned by your NAS user. They can be on
       # different shares.

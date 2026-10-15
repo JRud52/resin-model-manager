@@ -5,15 +5,16 @@ import logging
 import mimetypes
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Annotated, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, archives, auth, classify, config, db, library, mmf, settings
+from . import __version__, archives, auth, classify, config, db, library, mmf, oidc, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -1045,7 +1046,8 @@ def _login_response(request: Request, token: str) -> JSONResponse:
 @app.get("/api/auth/state")
 def auth_state(request: Request):
     v = getattr(request.state, "viewer", None)
-    return {"setup": auth.setup_needed(), "user": v.as_dict() if v else None}
+    return {"setup": auth.setup_needed(), "user": v.as_dict() if v else None,
+            "oidc": config.OIDC_NAME if oidc.enabled() else None}
 
 
 @app.post("/api/auth/setup")
@@ -1066,6 +1068,56 @@ def auth_login(body: LoginIn, request: Request):
     if not token:
         raise HTTPException(401, "Wrong username or password")
     return _login_response(request, token)
+
+
+def _oidc_redirect_uri(request: Request) -> str:
+    if config.OIDC_REDIRECT_URL:
+        return config.OIDC_REDIRECT_URL
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host.split(',')[0].strip()}/api/auth/oidc/callback"
+
+
+def _login_error(msg: str) -> RedirectResponse:
+    return RedirectResponse("/?" + urllib.parse.urlencode({"login_error": msg}), status_code=303)
+
+
+@app.get("/api/auth/oidc/login")
+def oidc_login(request: Request):
+    """Starts "Sign in with Authelia": off to the provider, which comes back to oidc_callback."""
+    if not oidc.enabled():
+        raise HTTPException(404, "Signing in with OIDC isn't set up")
+    try:
+        url, state = oidc.start(_oidc_redirect_uri(request))
+    except OSError as e:
+        log.warning("Couldn't reach %s: %s", config.OIDC_ISSUER, e)
+        return _login_error(f"Couldn't reach {config.OIDC_NAME}; try again later")
+    resp = RedirectResponse(url, status_code=303)
+    https = _oidc_redirect_uri(request).startswith("https:")
+    resp.set_cookie(oidc.COOKIE, state, max_age=600, httponly=True, samesite="lax", secure=https)
+    return resp
+
+
+@app.get("/api/auth/oidc/callback")
+def oidc_callback(request: Request, code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    if not oidc.enabled():
+        raise HTTPException(404, "Signing in with OIDC isn't set up")
+    if error:
+        return _login_error(f"{config.OIDC_NAME}: {error_description or error}")
+    try:
+        username, groups, next_path = oidc.finish(code, state, request.cookies.get(oidc.COOKIE),
+                                                  _oidc_redirect_uri(request))
+        user_id = auth.external_user(username, groups, config.OIDC_ADMIN_GROUP, config.OIDC_NAME)
+    except ValueError as e:
+        return _login_error(str(e))
+    except OSError as e:
+        log.warning("Signing in with %s failed: %s", config.OIDC_ISSUER, e)
+        return _login_error(f"Couldn't reach {config.OIDC_NAME}; try again later")
+    resp = RedirectResponse(next_path if next_path.startswith("/") and not next_path.startswith("//") else "/",
+                            status_code=303)
+    _set_session_cookie(resp, request, auth.new_session(user_id))
+    resp.delete_cookie(oidc.COOKIE)
+    return resp
 
 
 @app.post("/api/auth/logout")

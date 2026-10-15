@@ -1494,7 +1494,7 @@ $("#userBtn").onclick = () => {
   $("#acTitle").textContent = state.me.username;
   $("#acVisForm").default_public.value = state.me.default_public ? "1" : "0";
   $("#acPwForm").reset();
-  $("#acPwForm").classList.toggle("hidden", state.me.proxy);  // signed in through Authelia or the like
+  $("#acPwForm").classList.toggle("hidden", state.me.proxy || !state.me.has_password);  // Authelia accounts have none
   $("#acVisMsg").textContent = $("#acPwMsg").textContent = "";
   $("#accountDlg").showModal();
 };
