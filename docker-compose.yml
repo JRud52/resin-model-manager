@@ -12,6 +12,13 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "${PORT:-8417}:8417"
+    environment:
+      # Optional sign-in through Authelia (or another forward-auth proxy); see the
+      # README, "Signing in with Authelia". Off unless AUTH_PROXY is 1.
+      AUTH_PROXY: ${AUTH_PROXY:-0}
+      AUTH_PROXY_TRUSTED: ${AUTH_PROXY_TRUSTED:-}
+      AUTH_PROXY_ADMIN_GROUP: ${AUTH_PROXY_ADMIN_GROUP:-}
+      AUTH_PROXY_LOGOUT_URL: ${AUTH_PROXY_LOGOUT_URL:-}
     volumes:
       # Create both folders first, owned by your NAS user. They can be on
       # different shares.

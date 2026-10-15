@@ -41,3 +41,16 @@ TMP_DIR = DATA_DIR / "tmp"
 
 # Uploads by users other than the main admin go into LIBRARY_DIR/<USERS_FOLDER>/<username>/.
 USERS_FOLDER = "_users"
+
+# Sign-in through a reverse proxy with forward auth (Authelia, Authentik, ...): the proxy
+# checks who you are and passes the username on in a header. Off unless AUTH_PROXY is set.
+AUTH_PROXY = os.environ.get("AUTH_PROXY", "0").strip().lower() in ("1", "true", "yes", "on")
+# Who may send those headers: IPs, networks (10.0.0.0/8) or host names (a proxy container's
+# name on a shared Docker network), comma separated. Headers from anywhere else are ignored.
+AUTH_PROXY_TRUSTED = [t.strip() for t in os.environ.get("AUTH_PROXY_TRUSTED", "").split(",") if t.strip()]
+AUTH_PROXY_USER_HEADER = os.environ.get("AUTH_PROXY_USER_HEADER", "Remote-User").strip()
+AUTH_PROXY_GROUPS_HEADER = os.environ.get("AUTH_PROXY_GROUPS_HEADER", "Remote-Groups").strip()
+# Members of this group are admins (and others aren't); empty leaves admin rights to the app.
+AUTH_PROXY_ADMIN_GROUP = os.environ.get("AUTH_PROXY_ADMIN_GROUP", "").strip()
+# Where Log out goes for people signed in through the proxy (e.g. https://auth.example.com/logout).
+AUTH_PROXY_LOGOUT_URL = os.environ.get("AUTH_PROXY_LOGOUT_URL", "").strip()

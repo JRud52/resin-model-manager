@@ -29,6 +29,8 @@ groups them by **release** and **model**, separates **supported** and
   account with the same name gets a fresh folder and doesn't see them. A forgotten password is
   reset by an admin, or for the admin itself with
   `docker exec -it resin-models python -m app.auth reset-password <username>`.
+  With Authelia in front of the app, people can sign in through it instead, see
+  [Signing in with Authelia](#signing-in-with-authelia).
 * **Import files from the browser.** Click *Import files*, or drop files,
   folders or `.zip` / `.7z` archives anywhere on the page. They are uploaded
   into the app's library folder and indexed straight away. Archives stay
@@ -209,6 +211,7 @@ login.
 | `PUID` / `PGID` | `1000` | Your NAS user (`id -u`, `id -g`), so copied files belong to you. |
 | `PORT` | `8417` | Port on the NAS. |
 | `SOURCE_PATH` | *(none)* | Optional. An existing library on the NAS, mounted read-only so the Import dialog can copy it in. Leave it out to start from an empty library. |
+| `AUTH_PROXY`, `AUTH_PROXY_TRUSTED`, `AUTH_PROXY_ADMIN_GROUP`, `AUTH_PROXY_LOGOUT_URL` | *(off)* | Optional sign-in through Authelia, see below. |
 
 ### With Portainer (auto-updates from Git)
 
@@ -238,6 +241,52 @@ and then keeps reusing the old image on updates.
 To build the image yourself instead of pulling it, run
 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`
 from a checkout.
+
+### Signing in with Authelia
+
+If the app sits behind a reverse proxy protected by
+[Authelia](https://www.authelia.com/) (forward auth), it can take the user
+Authelia signed in instead of asking for its own password. Authelia passes the
+username to the app in the `Remote-User` header and the groups in
+`Remote-Groups`; the app makes an account the first time someone comes and
+signs them in from then on.
+
+Add these to the stack's environment variables in Portainer (or `.env`):
+
+| Variable | Example | Meaning |
+| --- | --- | --- |
+| `AUTH_PROXY` | `1` | Turns it on. |
+| `AUTH_PROXY_TRUSTED` | `swag` or `172.20.0.5` | Who may send those headers: your reverse proxy's container name (when it shares a Docker network with the app), IP address or network (`172.20.0.0/16`), comma separated. Headers from anywhere else are ignored and logged with the address they came from. Required: with nothing here, nobody is signed in by header. |
+| `AUTH_PROXY_ADMIN_GROUP` | `admins` | Optional. Members of this Authelia group are admins in the app and everyone else isn't, checked on every visit. Leave it out to manage admins in the app under *Manage users…*. The main admin always stays an admin. |
+| `AUTH_PROXY_LOGOUT_URL` | `https://auth.example.com/logout` | Optional. Where *Log out* goes, so it logs out of Authelia too; without it, Authelia signs you straight back in. Add `?rd=https://models.example.com/` to come back afterwards. |
+
+An Authelia username that matches an existing account (ignoring case) signs in
+to that account, so name your Authelia user like the admin account you made to
+keep it. A username the app can't use (more than 32 characters, or anything
+other than letters, digits, `.`, `-` and `_`) is refused with a message. Accounts made through Authelia
+have no password of their own; an admin can set one under *Manage users…* if
+someone also needs the local login, which keeps working for everyone. A
+session started by Authelia ends as soon as a request comes without its header,
+so going around the proxy doesn't keep someone signed in.
+
+Only trust the proxy itself. Anyone who can reach the app directly from a
+trusted address can claim to be anyone, so don't trust the Docker gateway
+(`x.x.x.1`) or your whole LAN. If the warning in the log shows every request
+coming from the gateway address, put the app and the proxy on a shared Docker
+network and trust the proxy by name.
+
+In Authelia's `configuration.yml`, give the app an access rule, for example:
+
+```yaml
+access_control:
+  rules:
+    - domain: models.example.com
+      policy: one_factor   # or two_factor
+```
+
+The reverse proxy then needs Authelia's forward-auth set up for that host and
+must pass on `Remote-User` and `Remote-Groups` (Authelia's integration guides
+for Traefik, nginx / SWAG, Nginx Proxy Manager and Caddy all do this).
 
 ### First run
 
@@ -280,6 +329,9 @@ python tests/make_sample_library.py /tmp/rmm/src
 SOURCE_DIR=/tmp/rmm/src LIBRARY_DIR=/tmp/rmm/lib DATA_DIR=/tmp/rmm/data uvicorn app.main:app --port 8417
 python tests/smoke_test.py http://localhost:8417 /tmp/rmm/src
 python tests/users_test.py http://localhost:8417  # accounts, public / private, admin mode
+# signing in through Authelia: start the server with AUTH_PROXY=1 AUTH_PROXY_TRUSTED=127.0.0.1
+# AUTH_PROXY_ADMIN_GROUP=admins AUTH_PROXY_LOGOUT_URL=https://auth.example.com/logout, then
+python tests/proxy_auth_test.py http://localhost:8417
 pip install playwright && python tests/mmf_test.py http://localhost:8417  # MyMiniFactory sync on a fake site
 ```
 

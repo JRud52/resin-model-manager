@@ -4,23 +4,34 @@ The first account (made on the first visit) is the main admin and owns everythin
 wasn't uploaded by another user. Admins make the other accounts; there is no sign-up.
 Each user sees their own models and everyone's public ones; an admin in admin mode sees
 every model. Only a model's owner, or an admin, can change it.
+
+With config.AUTH_PROXY on, a reverse proxy with forward auth (Authelia and the like) can sign
+people in instead: it passes on their username in a header, and their account is made the
+first time they come. Local logins keep working alongside.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
+import logging
 import re
 import secrets
+import socket
 import sys
 import time
 from dataclasses import dataclass
 
-from . import db, library
+from . import config, db, library
 
 COOKIE = "rmm_session"
 SESSION_DAYS = 365
 _ITERATIONS = 240_000
 USERNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+# Stored for accounts made by the reverse proxy: matches no password, so they can't log in
+# locally until an admin sets one.
+NO_PASSWORD = "!"
+log = logging.getLogger(__name__)
 
 
 def hash_password(password: str) -> str:
@@ -62,6 +73,7 @@ class Viewer:
     admin_mode: bool  # an admin seeing every model, private ones too
     default_public: bool
     folder: str  # where their uploads go; '' = the library itself (the main admin)
+    proxy: bool = False  # signed in through the reverse proxy, which also handles logging out
 
     @property
     def sees_all(self) -> bool:
@@ -73,22 +85,24 @@ class Viewer:
     def as_dict(self) -> dict:
         return {"id": self.id, "username": self.username, "is_admin": self.is_admin,
                 "admin_mode": self.sees_all, "default_public": self.default_public, "folder": self.folder,
-                "main_admin": self.id == db.MAIN_ADMIN}
+                "main_admin": self.id == db.MAIN_ADMIN, "proxy": self.proxy}
 
 
 def setup_needed() -> bool:
     return not db.conn().execute("SELECT 1 FROM users LIMIT 1").fetchone()
 
 
-def create_user(username: str, password: str, is_admin: bool = False) -> int:
+def create_user(username: str, password: str | None, is_admin: bool = False) -> int:
+    """A new account; password None for one signed in by the reverse proxy."""
     c = db.conn()
-    username, password = check_username(username), check_new_password(password)
+    username = check_username(username)
+    hashed = NO_PASSWORD if password is None else hash_password(check_new_password(password))
     if c.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
         raise ValueError(f"There is already a user called {username}")
     first = setup_needed()
     folder = "" if first else library.new_user_folder(username)  # the main admin's uploads go in the library itself
     cur = c.execute("INSERT INTO users(id, username, password, is_admin, folder) VALUES (?, ?, ?, ?, ?)",
-                    (db.MAIN_ADMIN if first else None, username, hash_password(password), int(is_admin or first), folder))
+                    (db.MAIN_ADMIN if first else None, username, hashed, int(is_admin or first), folder))
     if folder:
         c.execute("INSERT INTO folder_owners(folder, owner) VALUES (?, ?)", (folder, cur.lastrowid))
     c.commit()
@@ -108,13 +122,13 @@ def _token_key(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def new_session(user_id: int) -> str:
+def new_session(user_id: int, proxy: bool = False) -> str:
     token = secrets.token_urlsafe(32)
     now = time.time()
     c = db.conn()
     c.execute("DELETE FROM sessions WHERE seen < ?", (now - SESSION_DAYS * 86400,))
-    c.execute("INSERT INTO sessions(token, user_id, created, seen) VALUES (?, ?, ?, ?)",
-              (_token_key(token), user_id, now, now))
+    c.execute("INSERT INTO sessions(token, user_id, proxy, created, seen) VALUES (?, ?, ?, ?, ?)",
+              (_token_key(token), user_id, int(proxy), now, now))
     c.commit()
     return token
 
@@ -128,7 +142,7 @@ def viewer(token: str | None) -> Viewer | None:
     if not token:
         return None
     c = db.conn()
-    row = c.execute("""SELECT u.id, u.username, u.is_admin, u.default_public, u.folder, s.admin_mode, s.seen
+    row = c.execute("""SELECT u.id, u.username, u.is_admin, u.default_public, u.folder, s.admin_mode, s.proxy, s.seen
                        FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?""",
                     (_token_key(token),)).fetchone()
     if not row or row["seen"] < time.time() - SESSION_DAYS * 86400:
@@ -137,7 +151,65 @@ def viewer(token: str | None) -> Viewer | None:
         c.execute("UPDATE sessions SET seen = ? WHERE token = ?", (time.time(), _token_key(token)))
         c.commit()
     return Viewer(row["id"], row["username"], bool(row["is_admin"]), bool(row["admin_mode"]),
-                  bool(row["default_public"]), row["folder"])
+                  bool(row["default_public"]), row["folder"], bool(row["proxy"]))
+
+
+# ---------------------------------------------------------------- reverse proxy sign-in
+
+_resolved: dict[str, tuple[float, set[str]]] = {}  # host name -> (when, its addresses)
+
+
+def _addresses(host: str) -> set[str]:
+    when, ips = _resolved.get(host, (0.0, set()))
+    if time.time() - when > 60:  # a proxy container can get a new address when it restarts
+        try:
+            ips = {a[4][0] for a in socket.getaddrinfo(host, None)}
+        except OSError:
+            ips = set()
+        _resolved[host] = (time.time(), ips)
+    return ips
+
+
+def trusted_proxy(ip: str) -> bool:
+    """Whether a request from `ip` may say who is signed in (config.AUTH_PROXY_TRUSTED)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    for entry in config.AUTH_PROXY_TRUSTED:
+        try:
+            if addr in ipaddress.ip_network(entry, strict=False):
+                return True
+            continue
+        except ValueError:
+            pass  # a host name
+        if str(addr) in {str(ipaddress.ip_address(a.split("%")[0])) for a in _addresses(entry)}:
+            return True
+    return False
+
+
+def proxy_login(username: str, groups: set[str], token: str | None) -> tuple[Viewer, str | None]:
+    """The user the reverse proxy vouches for, with their account made on their first visit and
+    admin rights following config.AUTH_PROXY_ADMIN_GROUP. Returns their viewer and, when the
+    session in `token` isn't theirs, the token of a new one."""
+    username = check_username(username)
+    c = db.conn()
+    admin = config.AUTH_PROXY_ADMIN_GROUP in groups if config.AUTH_PROXY_ADMIN_GROUP else None
+    row = c.execute("SELECT id, is_admin FROM users WHERE username = ?", (username,)).fetchone()
+    if not row:
+        user_id = create_user(username, None, bool(admin))
+        log.info("Made an account for %s, signed in by the reverse proxy", username)
+    else:
+        user_id = row["id"]
+        if admin is not None and admin != bool(row["is_admin"]) and user_id != db.MAIN_ADMIN:
+            update_user(user_id, is_admin=admin)
+    v = viewer(token)
+    if v and v.id == user_id:
+        return v, None
+    token = new_session(user_id, proxy=True)
+    return viewer(token), token
 
 
 def set_admin_mode(token: str, on: bool):
