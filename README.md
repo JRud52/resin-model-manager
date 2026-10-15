@@ -288,6 +288,31 @@ The reverse proxy then needs Authelia's forward-auth set up for that host and
 must pass on `Remote-User` and `Remote-Groups` (Authelia's integration guides
 for Traefik, nginx / SWAG, Nginx Proxy Manager and Caddy all do this).
 
+With Traefik's Docker provider and Authelia's `authelia@docker` middleware
+(whose `authResponseHeaders` include `Remote-User` and `Remote-Groups`), the
+service looks like this. It publishes no port, so nobody can go around
+Authelia, and trusts Traefik by its container name on the shared network:
+
+```yaml
+services:
+  resin-models:
+    image: ghcr.io/jrud52/resin-model-manager:latest
+    environment:
+      AUTH_PROXY: "1"
+      AUTH_PROXY_TRUSTED: traefik
+      AUTH_PROXY_ADMIN_GROUP: admins
+      AUTH_PROXY_LOGOUT_URL: https://auth.example.com/logout?rd=https://models.example.com/
+    networks: [proxy]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.models.rule=Host(`models.example.com`)
+      - traefik.http.routers.models.middlewares=authelia@docker
+      - traefik.http.services.models.loadbalancer.server.port=8417
+networks:
+  proxy:
+    external: true
+```
+
 ### First run
 
 Open the app and create the admin account (it owns everything already in the
